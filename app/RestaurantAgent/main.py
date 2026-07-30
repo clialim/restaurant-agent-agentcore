@@ -150,6 +150,9 @@ agent = Agent(
     model=BedrockModel(model_id="us.anthropic.claude-sonnet-4-6"),
     system_prompt=SYSTEM_PROMPT,
     tools=[search_restaurants, get_restaurant_reviews, create_reservation],
+    # 스트리밍 중간 결과를 콘솔로 출력하지 않음.
+    # Windows 콘솔(cp949)에서 이모지 응답 시 UnicodeEncodeError가 발생하므로 비활성화.
+    callback_handler=None,
 )
 
 # ---------------------------------------------------------------------------
