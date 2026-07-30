@@ -1,0 +1,13 @@
+[project]
+name = "restaurant-agent"
+version = "0.1.0"
+description = "AgentCore Runtime에 배포하는 Strands 기반 식당 추천 에이전트"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "bedrock-agentcore==1.19.0",
+    "strands-agents==1.50.2",
+    "uvicorn==0.52.0",
+]
+
+[tool.uv]
+package = false
