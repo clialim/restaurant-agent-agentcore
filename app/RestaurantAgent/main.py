@@ -41,6 +41,14 @@ RESTAURANT_DB = {
         "rating": 4.4,
         "reviews": 64,
     },
+    "중식": {
+        "id": "rest-005",
+        "name": "루이 차이니즈",
+        "location": "삼성역 도보 6분",
+        "price": 38000,
+        "rating": 4.2,
+        "reviews": 51,
+    },
 }
 
 
