@@ -7,7 +7,16 @@
     "agentcore:created-by": "agentcore-cli",
     "agentcore:project-name": "RestaurantAgent"
   },
-  "runtimes": [],
+  "runtimes": [
+    {
+      "name": "RestaurantAgent",
+      "codeLocation": "app/RestaurantAgent",
+      "entrypoint": "main.py",
+      "build": "CodeZip",
+      "runtimeVersion": "PYTHON_3_13",
+      "networkMode": "PUBLIC"
+    }
+  ],
   "memories": [],
   "knowledgeBases": [],
   "credentials": [],
@@ -17,12 +26,7 @@
   "policyEngines": [],
   "configBundles": [],
   "abTests": [],
-  "harnesses": [
-    {
-      "name": "RestaurantAgent",
-      "path": "app/RestaurantAgent"
-    }
-  ],
+  "harnesses": [],
   "datasets": [],
   "payments": []
 }

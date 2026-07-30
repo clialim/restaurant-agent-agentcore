@@ -2,19 +2,15 @@
   "targets": {
     "default": {
       "resources": {
-        "harnesses": {
+        "runtimes": {
           "RestaurantAgent": {
-            "harnessId": "RestaurantAgent_RestaurantAgent-q3m7pe2Ww7",
-            "harnessArn": "arn:aws:bedrock-agentcore:us-west-2:262428258542:harness/RestaurantAgent_RestaurantAgent-q3m7pe2Ww7",
-            "roleArn": "arn:aws:iam::262428258542:role/RestaurantAgent_RestaurantAgent",
-            "status": "READY",
-            "harnessVersion": 1,
-            "agentRuntimeArn": "arn:aws:bedrock-agentcore:us-west-2:262428258542:runtime/harness_RestaurantAgent_RestaurantAgent-A3J8AT4Isi",
-            "provisioner": "cloudformation"
+            "runtimeId": "RestaurantAgent_RestaurantAgent-b4sWcjH7j6",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:262428258542:runtime/RestaurantAgent_RestaurantAgent-b4sWcjH7j6",
+            "roleArn": "arn:aws:iam::262428258542:role/AgentCore-RestaurantAgent-ApplicationAgentRestauran-yC9jrwuQqWDk"
           }
         },
         "stackName": "AgentCore-RestaurantAgent-default",
-        "deployHash": "495f385b2b911581"
+        "deployHash": "fb2862bf2b46317c"
       }
     }
   }
