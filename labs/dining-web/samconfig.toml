@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "dining-web"
+capabilities = ["CAPABILITY_IAM"]
+resolve_s3 = true
+confirm_changeset = false
+fail_on_empty_changeset = false
+
+[default.deploy.parameters.parameter_overrides]
+AgentRuntimeArn = "arn:aws:bedrock-agentcore:us-west-2:262428258542:runtime/RestaurantAgent_RestaurantAgent-b4sWcjH7j6"
+
+[default.global.parameters]
+region = "us-west-2"
