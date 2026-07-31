@@ -4,10 +4,11 @@ phases:
   install:
     runtime-versions:
       nodejs: 20
-      python: 3.12
+      python: 3.13
     commands:
-      - npm install -g @aws/agentcore
-      - pip install uv
+      # 배포 도구를 고정 버전으로 설치해 재현성을 확보합니다.
+      - npm install -g @aws/[email protected]
+      - pip install uv==0.10.6
   build:
     commands:
       # -y: 확인 프롬프트 자동 승인 (비대화형)

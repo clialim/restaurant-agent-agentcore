@@ -17,10 +17,18 @@ package = false
 target-version = "py313"
 line-length = 100
 
+[tool.bandit]
+# 가상환경·생성물은 정적 분석 대상에서 제외합니다.
+exclude_dirs = [".venv", "app/RestaurantAgent/.venv", "agentcore/cdk", "node_modules"]
+
 [tool.ruff.lint]
 select = ["B", "E4", "E7", "E9", "F", "I", "UP"]
 
 [dependency-groups]
 dev = [
     "ruff==0.16.0",
+    "pytest==9.0.3",
+    "bandit==1.8.6",
+    "pip-audit==2.9.0",
+    "detect-secrets==1.5.0",
 ]
