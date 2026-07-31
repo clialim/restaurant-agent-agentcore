@@ -181,7 +181,7 @@ AI 에이전트의 신뢰 경계는 인증 없는 PUBLIC 입력에서 시작합�
 
 AgentCore Runtime은 `AWS/Bedrock-AgentCore` 네임스페이스로 메트릭(Invocations, SystemErrors, Throttles, Latency, ActiveSessionCount)을 발행합니다. 이를 코드로 감시합니다.
 
-- [`infra/observability/cloudwatch.yaml`](infra/observability/cloudwatch.yaml): 로그 보존, 서버 오류·쓰로틀·p99 지연·활성 세션 급증 알람, SNS 통지, 대시보드를 선언한 CloudFormation 템플릿.
+- [`infra/observability/cloudwatch.yaml`](infra/observability/cloudwatch.yaml): 서버 오류·쓰로틀·p99 지연·활성 세션 급증 알람, SNS 통지 + SQS 내구성 싱크, 대시보드를 선언한 CloudFormation 템플릿. 알람은 SNS로 발행되고, 통지 유실을 막기 위해 SQS 큐가 구독합니다(이메일 구독이 불가한 계정에서도 동작).
 - [`ops/07_observability_check.py`](ops/07_observability_check.py): 알람 상태와 최근 메트릭을 요약하는 읽기 전용 점검 스크립트(ALARM 시 exit 1).
 
 ```powershell

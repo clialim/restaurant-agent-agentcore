@@ -43,6 +43,40 @@ Resources:
       Endpoint: !Ref AlarmEmail
       TopicArn: !Ref AlertTopic
 
+  # 내구성 알림 싱크 - 알람 통지를 잃지 않도록 SQS로 보관합니다.
+  # 이메일 구독이 불가한 계정에서도 토픽에 엔드포인트를 제공해,
+  # 통지가 유실되지 않고 다운스트림(Lambda/티켓팅 등)에서 소비할 수 있게 합니다.
+  AlertQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: restaurant-agent-alerts
+      MessageRetentionPeriod: 1209600  # 14일
+
+  AlertQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt AlertQueue.Arn
+      TopicArn: !Ref AlertTopic
+      RawMessageDelivery: true
+
+  AlertQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref AlertQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSNSPublish
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt AlertQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref AlertTopic
+
   # 참고: AgentCore Runtime이 생성하는 vended 로그 그룹
   # (/aws/bedrock-agentcore/runtimes/<id>-<endpoint>)은 서비스가 소유하므로
   # 이 스택에서 새로 만들지 않습니다. 보존 기간은 멱등한 CLI로 설정합니다:
@@ -163,6 +197,9 @@ Outputs:
   AlertTopicArn:
     Description: 알람 통지 SNS 토픽 ARN
     Value: !Ref AlertTopic
+  AlertQueueUrl:
+    Description: 알림을 보관하는 SQS 큐 URL
+    Value: !Ref AlertQueue
   DashboardName:
     Description: CloudWatch 대시보드 이름
     Value: !Ref Dashboard
