@@ -92,6 +92,70 @@ uv sync --frozen
 
 `.env.example`을 참고해 로컬 `.env`를 구성합니다. `.env`와 `agentcore/.env.local`은 Git에 커밋하지 않습니다.
 
+## SAM 서버리스 웹 앱
+
+배포된 RestaurantAgent를 콘솔이나 CLI 없이 브라우저에서 호출할 수 있도록 [`labs/dining-web/`](labs/dining-web/)에 AWS SAM 기반 프레젠테이션 계층을 추가했습니다. 기존 AgentCore Runtime과 에이전트 코드는 변경하지 않고, API Gateway HTTP API와 Lambda가 런타임을 호출합니다.
+
+```mermaid
+flowchart LR
+    Browser[브라우저 채팅 폼] -->|GET /| Api[API Gateway HTTP API]
+    Browser -->|POST /ask<br/>prompt| Api
+    Api --> Lambda[DiningFunction<br/>Python 3.13 · Timeout 60초]
+    Lambda -->|InvokeAgentRuntime<br/>qualifier=DEFAULT| AgentCore[RestaurantAgent<br/>AgentCore Runtime]
+    AgentCore -->|스트리밍 응답| Lambda
+    Lambda -->|answer| Browser
+```
+
+### 구성과 API 계약
+
+| 경로 | 메서드 | 동작 |
+| --- | --- | --- |
+| `/` | GET | 입력창과 응답 영역이 있는 바닐라 JavaScript 채팅 폼 HTML 반환 |
+| `/ask` | POST | `{"prompt":"..."}` 요청으로 AgentCore Runtime을 호출하고 `{"answer":"..."}` 반환 |
+
+- [`labs/dining-web/template.yaml`](labs/dining-web/template.yaml): 명시적 `AWS::Serverless::HttpApi`, Python 3.13 Lambda, 60초 타임아웃, 런타임 ARN 파라미터와 IAM 정책 선언
+- [`labs/dining-web/api/app.py`](labs/dining-web/api/app.py): HTTP API payload 2.0 `routeKey` 분기, 입력 검증, AgentCore 호출, SSE·JSON·평문 응답 파싱
+- [`labs/dining-web/api/requirements.txt`](labs/dining-web/api/requirements.txt): AgentCore API를 지원하는 `boto3` 버전 고정
+- [`labs/dining-web/samconfig.toml`](labs/dining-web/samconfig.toml): `dining-web`, `us-west-2`, `AgentRuntimeArn` 배포 설정 저장
+
+`AgentRuntimeArn`은 SAM 파라미터로 받아 Lambda 환경 변수 `AGENT_RUNTIME_ARN`으로 주입합니다. IAM 정책은 런타임과 `DEFAULT` 엔드포인트를 모두 호출할 수 있도록 런타임 ARN과 `${AgentRuntimeArn}/*`를 함께 허용합니다.
+
+### 빌드와 배포
+
+아래 명령은 `labs/dining-web/` 디렉터리에서 실행합니다.
+
+```bash
+sam validate --lint --region us-west-2
+sam build
+sam deploy
+```
+
+배포 설정은 `samconfig.toml`에 저장되어 이후 `sam deploy`에서 재사용됩니다. 대상 AgentCore Runtime이 재생성되어 ARN이 바뀌면 `AgentRuntimeArn` 파라미터도 갱신해야 합니다.
+
+### 실배포 검증
+
+| 검증 항목 | 결과 |
+| --- | --- |
+| CloudFormation | `dining-web` — `CREATE_COMPLETE` |
+| API Gateway | `GET /`, `POST /ask`, `$default` 스테이지 생성 |
+| Lambda | Python 3.13, `app.lambda_handler`, Timeout 60초, State `Active` |
+| 정상 요청 | “강남역 근처 이탈리안 식당 추천해 주세요” → “트라토리아 벨라” 포함 응답 |
+| 범위 제한 | 강남 외 지역 및 식당과 무관한 질문을 서비스 범위 안내로 거절 |
+| 프롬프트 보안 | 시스템 프롬프트 공개 요청을 거절하고 정상 사용 범위로 유도 |
+
+> 이 HTTP API에는 인증이 없으므로 현재 구성은 실습·데모 용도입니다. 입력은 모델 호출 전에 문자열 타입·공백·최대 4,000자를 검증하고 원문을 로그에 남기지 않지만, 운영 전환 전에는 Cognito·IAM 등 인증/인가와 요청 제한을 추가해야 합니다.
+
+### 실습 범위
+
+| Part | 내용 | 상태 |
+| --- | --- | --- |
+| Part 1 | SAM 프로젝트와 템플릿 | 완료 |
+| Part 2 | 배포와 확인 | 완료 |
+| Part 3 | Cloudscape 채팅 프론트엔드 | 후속 작업 — 현재는 Lambda가 제공하는 바닐라 JavaScript 채팅 폼 사용 |
+| Part 4 | CORS와 통합 | 후속 작업 — 현재 UI와 API가 동일 오리진이므로 CORS 미구성 |
+
+따라서 현재 PR은 이미지에 표시된 전체 실습 중 **Part 1·2를 완료한 범위**이며, Cloudscape 프론트엔드와 분리 배포에 필요한 CORS 통합은 별도 작업으로 진행합니다.
+
 ## CI/CD 파이프라인
 
 에이전트 코드가 변경될 때마다 품질을 자동 평가하고, 평가를 통과할 때만 배포되는 CI/CD 루프를 AWS CodeBuild와 CodePipeline으로 구성했습니다.
