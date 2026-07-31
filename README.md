@@ -144,6 +144,8 @@ sam deploy
 | 프롬프트 보안 | 시스템 프롬프트 공개 요청을 거절하고 정상 사용 범위로 유도 |
 
 > 이 HTTP API에는 인증이 없으므로 현재 구성은 실습·데모 용도입니다. 입력은 모델 호출 전에 문자열 타입·공백·최대 4,000자를 검증하고 원문을 로그에 남기지 않지만, 운영 전환 전에는 Cognito·IAM 등 인증/인가와 요청 제한을 추가해야 합니다.
+>
+> Lambda 타임아웃 60초는 기본 3초 종료를 방지하기 위한 값이지만, API Gateway HTTP API의 [최대 통합 타임아웃은 30초이며 상향할 수 없습니다](https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-quotas.html). 30초를 넘는 호출까지 지원하려면 비동기 작업 API나 별도 스트리밍 아키텍처로 전환해야 합니다.
 
 ### 실습 범위
 
