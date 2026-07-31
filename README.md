@@ -35,6 +35,8 @@ RestaurantAgent/
 ├── app/
 │   └── RestaurantAgent/    # 에이전트 애플리케이션 코드(main.py)
 ├── ops/                    # 버전·엔드포인트 운영 스크립트
+├── scripts/
+│   └── build_source_bundle.py  # CI/CD 소스 번들(ZIP) 생성
 ├── tests/
 │   └── eval_gate.py        # 배포 전 품질 평가 게이트
 ├── buildspec-test.yml      # CodeBuild: 평가 게이트 실행
@@ -93,6 +95,41 @@ flowchart LR
 uv run python tests/eval_gate.py
 ```
 
+### 소스 번들 생성과 배포
+
+파이프라인의 Source는 S3에 올라온 ZIP을 사용합니다. `scripts/build_source_bundle.py`는 `git ls-files`로 추적 중인 파일만 담아 재현 가능한 소스 번들을 만듭니다. 작업 트리의 현재 내용을 담으므로 `.venv`·`node_modules`·`cdk.out`·`.cache` 같은 생성물이 포함되지 않습니다.
+
+```powershell
+# 소스 번들 생성
+uv run python scripts/build_source_bundle.py
+
+# S3 업로드 → 파이프라인 트리거
+aws s3 cp restaurant-agent-src.zip s3://restaurant-agent-src-262428258542/restaurant-agent-src.zip
+```
+
+### 평가 게이트 동작 검증 (실패 → 복구)
+
+평가 게이트가 실제로 저품질 변경의 배포를 막는지 확인하기 위해, 도구 데이터에 회귀(추천 대상 식당 데이터 누락, 매운맛 플래그 오설정)를 주입해 파이프라인을 실행했습니다.
+
+| 구분 | 소스 상태 | 평가 평균 | 결과 |
+| --- | --- | --- | --- |
+| 실패 | 도구 데이터 회귀 주입 | 0.40 (< 0.7) | Build 실패 → **Deploy 차단** |
+| 복구 | 정상 데이터 복원 | 0.73 (≥ 0.7) | Build 통과 → **Deploy 성공** |
+
+품질이 임계값 아래로 떨어진 변경은 Build 단계에서 `exit 1`로 차단되어 프로덕션까지 도달하지 못하고, 정상 복원 후에는 전체 스테이지가 통과해 자동 배포되는 것을 확인했습니다.
+
+1. 게이트 차단 — Build 실패, Deploy 미실행
+회귀가 주입된 소스로 평가 평균이 0.40이 되어 Build가 실패하고 Deploy 스테이지가 실행되지 않은 파이프라인 화면.
+<!-- 이미지 자리: 실패 파이프라인 -->
+
+2. 게이트 차단 로그 — CodeBuild
+`평균 점수: 0.40 (임계 0.7)` / `게이트 미달 — 배포를 차단합니다.`가 찍힌 CodeBuild 빌드 로그.
+<!-- 이미지 자리: 실패 빌드 로그 -->
+
+3. 복구 — 전체 스테이지 성공
+정상 데이터로 복원한 뒤 Source → Build → Deploy가 모두 성공한 파이프라인 화면.
+<!-- 이미지 자리: 복구 파이프라인 -->
+
 ## 브랜치와 PR 단위
 
 | 순서 | 브랜치 | 범위 |
@@ -102,6 +139,7 @@ uv run python tests/eval_gate.py
 | 3 | `feature/agentcore-version-endpoints` | Part 4 전반: `01`~`03` 조회·생성·호출 스크립트 |
 | 4 | `feature/agentcore-canary-rollout` | Part 4 후반: `04`~`05` 승격·롤백 스크립트 |
 | 5 | `feature/ci-pipeline` | 평가 게이트 기반 CodeBuild/CodePipeline CI/CD 구성 |
+| 6 | `feature/eval-gate-demo` | 소스 번들 스크립트, 평가 게이트 실패/복구 검증 |
 
 각 브랜치는 `main`에서 생성하고, 검토와 검증을 마친 뒤 PR을 squash merge하고 삭제합니다. 콘솔 확인만 필요한 Part 3은 별도 코드 브랜치로 나누지 않고 Part 2 PR의 검증 결과에 기록합니다.
 
