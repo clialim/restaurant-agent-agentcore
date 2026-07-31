@@ -17,9 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / ".secrets.baseline"
 
-# 가상환경·의존성·생성물은 스캔에서 제외합니다(성능·오탐 방지).
+# 가상환경·의존성·생성물·baseline 자체는 스캔에서 제외합니다(성능·오탐 방지).
 # baseline도 반드시 동일한 패턴으로 생성해야 결과가 일치합니다.
-EXCLUDE_FILES = r"(^|/)(\.venv|node_modules|cdk\.out|\.cache|\.git|\.ruff_cache)/"
+EXCLUDE_FILES = r"(\.venv|node_modules|cdk\.out|\.cache|\.ruff_cache)[/\\]|\.secrets\.baseline$"
 
 
 def _results(payload: dict) -> set[tuple[str, str]]:
