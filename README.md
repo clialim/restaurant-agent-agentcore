@@ -94,16 +94,18 @@ uv sync --frozen
 
 ## SAM 서버리스 웹 앱
 
-배포된 RestaurantAgent를 콘솔이나 CLI 없이 브라우저에서 호출할 수 있도록 [`labs/dining-web/`](labs/dining-web/)에 AWS SAM 기반 프레젠테이션 계층을 추가했습니다. 기존 AgentCore Runtime과 에이전트 코드는 변경하지 않고, API Gateway HTTP API와 Lambda가 런타임을 호출합니다.
+배포된 RestaurantAgent를 콘솔이나 CLI 없이 브라우저에서 호출할 수 있도록 [`labs/dining-web/`](labs/dining-web/)에 AWS SAM 기반 프레젠테이션 계층을 추가했습니다. 기존 AgentCore Runtime과 에이전트 코드는 변경하지 않고, API Gateway HTTP API와 Lambda가 런타임을 호출합니다. 브라우저는 SigV4 서명이 필요한 `invoke_agent_runtime`을 직접 호출할 수 없으므로, 자격 증명을 가진 Lambda가 웹과 런타임 사이의 경계 역할을 합니다.
+
+프론트엔드는 두 가지입니다. Lambda가 `GET /`로 제공하는 무빌드 폴백 폼과, [`labs/dining-web/frontend/`](labs/dining-web/frontend/)의 Cloudscape 기반 React SPA입니다.
 
 ```mermaid
 flowchart LR
-    Browser[브라우저 채팅 폼] -->|GET /| Api[API Gateway HTTP API]
-    Browser -->|POST /ask<br/>prompt| Api
+    SPA[Cloudscape React SPA<br/>localhost:5173] -->|POST /ask · CORS| Api[API Gateway HTTP API]
+    Browser[브라우저 폴백 폼] -->|GET /| Api
     Api --> Lambda[DiningFunction<br/>Python 3.13 · Timeout 60초]
     Lambda -->|InvokeAgentRuntime<br/>qualifier=DEFAULT| AgentCore[RestaurantAgent<br/>AgentCore Runtime]
     AgentCore -->|스트리밍 응답| Lambda
-    Lambda -->|answer| Browser
+    Lambda -->|answer| Api
 ```
 
 ### 구성과 API 계약
@@ -132,6 +134,33 @@ sam deploy
 
 배포 설정은 `samconfig.toml`에 저장되어 이후 `sam deploy`에서 재사용됩니다. 대상 AgentCore Runtime이 재생성되어 ARN이 바뀌면 `AgentRuntimeArn` 파라미터도 갱신해야 합니다.
 
+### Cloudscape 채팅 프론트엔드
+
+[`labs/dining-web/frontend/`](labs/dining-web/frontend/)는 [Cloudscape Design System](https://cloudscape.design/)(AWS 콘솔 디자인 시스템)으로 만든 Vite + React 채팅 SPA입니다. `ChatBubble`·`Avatar`(`@cloudscape-design/chat-components`)와 `PromptInput`(`@cloudscape-design/components`)으로 대화 UI를 구성하고, `POST /ask`를 호출해 응답을 말풍선으로 표시합니다.
+
+```bash
+cd labs/dining-web/frontend
+npm install
+cp .env.example .env.local   # VITE_API_URL을 배포된 ApiUrl로 설정
+npm run dev                  # http://localhost:5173
+```
+
+API 엔드포인트는 하드코딩하지 않고 `VITE_API_URL` 환경 변수(`.env.local`, `.gitignore`의 `*.local`로 커밋 제외)에서 읽습니다. `VITE_` 접두 변수는 dev 서버 시작·빌드 시점에 주입되므로 값을 바꾸면 재시작이 필요합니다.
+
+### CORS 통합
+
+로컬 SPA(`http://localhost:5173`)와 배포된 API는 오리진이 다르므로 브라우저가 교차 출처 요청을 차단합니다. `curl`은 오리진 개념이 없어 통과하지만 브라우저는 서버의 명시적 허용을 요구합니다. `DiningHttpApi`의 `CorsConfiguration`에 필요한 오리진만 허용해 게이트웨이가 preflight(OPTIONS)와 `Access-Control-Allow-Origin` 헤더를 처리하도록 했습니다(Lambda 코드는 그대로).
+
+```yaml
+CorsConfiguration:
+  AllowOrigins:
+    - http://localhost:5173   # 와일드카드(*) 대신 필요한 오리진만
+  AllowMethods: [GET, POST]
+  AllowHeaders: [Content-Type]
+```
+
+`CorsConfiguration`은 `Globals.HttpApi`에는 없는 속성이라 명시적 `AWS::Serverless::HttpApi` 리소스에만 지정할 수 있습니다. 정적 호스팅으로 배포하면 그 도메인을 `AllowOrigins`에 추가합니다.
+
 ### 실배포 검증
 
 | 검증 항목 | 결과 |
@@ -142,6 +171,9 @@ sam deploy
 | 정상 요청 | “강남역 근처 이탈리안 식당 추천해 주세요” → “트라토리아 벨라” 포함 응답 |
 | 범위 제한 | 강남 외 지역 및 식당과 무관한 질문을 서비스 범위 안내로 거절 |
 | 프롬프트 보안 | 시스템 프롬프트 공개 요청을 거절하고 정상 사용 범위로 유도 |
+| CORS 허용 | `localhost:5173` preflight `204` + `Access-Control-Allow-Origin`, 실제 `POST`에도 헤더 부착 |
+| CORS 차단 | 미허용 오리진은 `Access-Control-Allow-Origin` 미부착 → 브라우저가 차단 |
+| 프론트엔드 | Vite 프로덕션 빌드 성공, oxlint 통과 |
 
 > 이 HTTP API에는 인증이 없으므로 현재 구성은 실습·데모 용도입니다. 입력은 모델 호출 전에 문자열 타입·공백·최대 4,000자를 검증하고 원문을 로그에 남기지 않지만, 운영 전환 전에는 Cognito·IAM 등 인증/인가와 요청 제한을 추가해야 합니다.
 >
@@ -153,10 +185,10 @@ sam deploy
 | --- | --- | --- |
 | Part 1 | SAM 프로젝트와 템플릿 | 완료 |
 | Part 2 | 배포와 확인 | 완료 |
-| Part 3 | Cloudscape 채팅 프론트엔드 | 후속 작업 — 현재는 Lambda가 제공하는 바닐라 JavaScript 채팅 폼 사용 |
-| Part 4 | CORS와 통합 | 후속 작업 — 현재 UI와 API가 동일 오리진이므로 CORS 미구성 |
+| Part 3 | Cloudscape 채팅 프론트엔드 | 완료 — `frontend/`의 Vite + React + Cloudscape SPA |
+| Part 4 | CORS와 통합 | 완료 — `DiningHttpApi.CorsConfiguration`으로 로컬 오리진 허용 |
 
-따라서 현재 PR은 이미지에 표시된 전체 실습 중 **Part 1·2를 완료한 범위**이며, Cloudscape 프론트엔드와 분리 배포에 필요한 CORS 통합은 별도 작업으로 진행합니다.
+브라우저의 Cloudscape 채팅 → HTTP API → Lambda → AgentCore Runtime까지 전체 경로가 연결되어 4개 Part를 모두 완료했습니다. 멀티턴 세션(`runtimeSessionId`)과 프론트엔드 정적 호스팅은 후속 개선 항목입니다.
 
 ## CI/CD 파이프라인
 
