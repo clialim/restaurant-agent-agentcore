@@ -1,0 +1,15 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+      python: 3.12
+    commands:
+      - npm install -g @aws/agentcore
+      - pip install uv
+  build:
+    commands:
+      # -y: 확인 프롬프트 자동 승인 (비대화형)
+      # -v: 리소스 단위 배포 이벤트를 빌드 로그에 출력
+      - agentcore deploy -y -v

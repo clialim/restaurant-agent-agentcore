@@ -22,3 +22,7 @@ agentcore/.env.local
 .idea/
 .DS_Store
 Thumbs.db
+
+# CI/CD source bundle artifacts (built locally, uploaded to S3)
+/restaurant-agent-src.zip
+/src-bundle.zip
