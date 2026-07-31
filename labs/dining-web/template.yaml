@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  dining-web — 배포된 RestaurantAgent(AgentCore Runtime)를 브라우저 채팅 폼에서
+  호출하는 SAM 서버리스 웹 앱. HTTP API(payload 2.0) + Lambda(python3.13).
+
+Parameters:
+  AgentRuntimeArn:
+    Type: String
+    Description: >
+      호출할 AgentCore Runtime의 ARN. 하드코딩하지 않고 배포 시 입력받아
+      sam deploy --guided 응답이 samconfig.toml에 저장됩니다.
+    AllowedPattern: '^arn:aws:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:runtime/.+$'
+    ConstraintDescription: 유효한 bedrock-agentcore runtime ARN이어야 합니다.
+
+Globals:
+  Function:
+    # 기본 3초로는 에이전트 호출이 타임아웃됩니다 — 이 미션의 필수 값.
+    Timeout: 60
+    MemorySize: 256
+    Runtime: python3.13
+
+Resources:
+  # 명시적 HTTP API — 뒤 확장(CORS 등)을 붙일 자리를 확보하기 위해 암묵 생성 대신 선언.
+  DiningHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      # HTTP API는 payload 2.0을 사용합니다(event["routeKey"] 분기).
+      StageName: $default
+
+  DiningFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: api/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          AGENT_RUNTIME_ARN: !Ref AgentRuntimeArn
+      Policies:
+        # InvokeAgentRuntime은 런타임과 엔드포인트의 이중 인가입니다.
+        # 런타임 ARN만으로는 DEFAULT 엔드포인트 호출이 AccessDenied가 나므로
+        # "${AgentRuntimeArn}/*"(엔드포인트)까지 함께 허용합니다.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock-agentcore:InvokeAgentRuntime
+              Resource:
+                - !Ref AgentRuntimeArn
+                - !Sub '${AgentRuntimeArn}/*'
+      Events:
+        ChatForm:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiningHttpApi
+            Method: GET
+            Path: /
+        Ask:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref DiningHttpApi
+            Method: POST
+            Path: /ask
+
+Outputs:
+  ApiUrl:
+    Description: 채팅 폼 URL — 브라우저로 열어 질문을 입력합니다.
+    Value: !Sub 'https://${DiningHttpApi}.execute-api.${AWS::Region}.amazonaws.com/'
+  FunctionArn:
+    Description: DiningFunction Lambda ARN
+    Value: !GetAtt DiningFunction.Arn
