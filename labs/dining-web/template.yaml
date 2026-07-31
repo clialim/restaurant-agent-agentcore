@@ -21,12 +21,23 @@ Globals:
     Runtime: python3.13
 
 Resources:
-  # 명시적 HTTP API — 뒤 확장(CORS 등)을 붙일 자리를 확보하기 위해 암묵 생성 대신 선언.
+  # 명시적 HTTP API — CORS 등 API 속성을 붙일 자리를 확보하기 위해 암묵 생성 대신 선언.
   DiningHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       # HTTP API는 payload 2.0을 사용합니다(event["routeKey"] 분기).
       StageName: $default
+      # CORS는 이 HttpApi 리소스 속성으로만 지정합니다(Globals.HttpApi에는 없음).
+      # 게이트웨이가 preflight(OPTIONS)와 Access-Control-Allow-Origin을 처리하므로
+      # Lambda 코드는 그대로 둡니다. 와일드카드(*) 대신 로컬 dev 오리진만 허용합니다.
+      CorsConfiguration:
+        AllowOrigins:
+          - http://localhost:5173
+        AllowMethods:
+          - GET
+          - POST
+        AllowHeaders:
+          - Content-Type
 
   DiningFunction:
     Type: AWS::Serverless::Function
