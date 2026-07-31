@@ -185,15 +185,23 @@ AgentCore Runtime은 `AWS/Bedrock-AgentCore` 네임스페이스로 메트릭(Inv
 - [`ops/07_observability_check.py`](ops/07_observability_check.py): 알람 상태와 최근 메트릭을 요약하는 읽기 전용 점검 스크립트(ALARM 시 exit 1).
 
 ```powershell
-# 관찰성 스택 배포 (이메일 SNS 구독 확인 필요)
+# 관찰성 스택 배포 (SNS 토픽 + 알람 + 대시보드)
+# AlarmEmail은 선택 — 넣으면 이메일 통지 구독을 생성하고, 비우면 건너뜁니다.
 aws cloudformation deploy `
   --template-file infra/observability/cloudwatch.yaml `
   --stack-name restaurant-agent-observability `
   --parameter-overrides [email protected]
 
+# (선택) vended 로그 그룹 보존 기간 설정 — 서비스 소유 로그 그룹이라 스택 밖에서 멱등하게 적용
+aws logs put-retention-policy `
+  --log-group-name /aws/bedrock-agentcore/runtimes/<runtimeId>-DEFAULT `
+  --retention-in-days 30
+
 # 운영 상태 점검 (읽기 전용)
 uv run python ops/07_observability_check.py --window-min 60
 ```
+
+> 참고: 일부 워크숍/샌드박스 계정은 SNS 이메일 구독을 차단합니다. 이 경우 `AlarmEmail`을 비우고 배포하면 알람·대시보드는 그대로 생성됩니다.
 
 ## 브랜치와 PR 단위
 
