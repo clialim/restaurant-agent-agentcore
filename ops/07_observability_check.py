@@ -138,7 +138,10 @@ def main() -> int:
         names = ", ".join(a["AlarmName"] for a in in_alarm)
         print(f"\n경보 상태 알람: {names}")
         return 1
-    print("\n모든 알람 정상(또는 알람 미배포).")
+    if alarms:
+        print(f"\n모든 알람({len(alarms)}개) 정상.")
+    else:
+        print("\n프로젝트 알람이 배포되지 않았습니다.")
     return 0
 
 
