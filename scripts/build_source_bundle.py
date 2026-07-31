@@ -14,7 +14,7 @@
         s3://restaurant-agent-src-262428258542/restaurant-agent-src.zip
 """
 
-import subprocess
+import subprocess  # nosec B404
 import sys
 import zipfile
 from pathlib import Path
@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def tracked_files() -> list[str]:
     """git이 추적 중인 파일 목록을 반환합니다."""
-    result = subprocess.run(
+    # 고정 인자 리스트, shell 미사용, 사용자 입력 없음 → 명령 주입 위험 없음
+    result = subprocess.run(  # nosec B603 B607
         ["git", "ls-files"],
         cwd=ROOT,
         capture_output=True,
