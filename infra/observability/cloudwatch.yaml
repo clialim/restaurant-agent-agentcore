@@ -4,21 +4,16 @@ Description: >
   AgentCore Runtime은 AWS/Bedrock-AgentCore 네임스페이스로 메트릭을 발행합니다
   (Invocations, Throttles, SystemErrors, UserErrors, Latency, ActiveSessionCount).
   이 템플릿은 콘솔에서 수동 생성했던 모니터링을 코드로 재현 가능하게 만듭니다.
+  AgentCore가 소유하는 vended 로그 그룹은 이 스택에서 생성하지 않으며,
+  보존 기간은 별도 CLI로 설정합니다(README 참고).
 
 Parameters:
   AlarmEmail:
     Type: String
-    Description: 알람 통지를 받을 이메일 (SNS 구독 확인 필요)
-    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
-  AgentLogGroupName:
-    Type: String
-    Default: /aws/bedrock-agentcore/runtimes/RestaurantAgent_RestaurantAgent-b4sWcjH7j6-DEFAULT
-    Description: AgentCore Runtime 애플리케이션 로그 그룹 이름
-  LogRetentionDays:
-    Type: Number
-    Default: 30
-    Description: 로그 보존 기간(일)
-    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 180, 365]
+    Default: ""
+    Description: >
+      알람 통지를 받을 이메일. 비워두면 이메일 구독을 생성하지 않습니다
+      (SNS 이메일 구독을 차단하는 계정에서도 배포 가능). 형식 검증은 SNS가 수행합니다.
   LatencyThresholdMs:
     Type: Number
     Default: 15000
@@ -27,6 +22,22 @@ Parameters:
     Type: Number
     Default: 50
     Description: 동시 활성 세션 급증 알람 임계값
+  AgentRuntimeArn:
+    Type: String
+    Default: arn:aws:bedrock-agentcore:us-west-2:262428258542:runtime/RestaurantAgent_RestaurantAgent-b4sWcjH7j6
+    Description: CloudWatch Resource 차원에 사용할 AgentCore Runtime ARN
+  EndpointMetricName:
+    Type: String
+    Default: RestaurantAgent_RestaurantAgent::DEFAULT
+    Description: CloudWatch Name 차원(AgentName::EndpointName)
+  InvocationOperation:
+    Type: String
+    Default: InvokeAgentRuntime
+    Description: CloudWatch Operation 차원
+
+Conditions:
+  # 이메일이 제공된 경우에만 이메일 구독을 생성합니다.
+  HasEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
 
 Resources:
   # 알람 통지 채널 -----------------------------------------------------------
@@ -38,20 +49,50 @@ Resources:
 
   AlertEmailSubscription:
     Type: AWS::SNS::Subscription
+    Condition: HasEmail
     Properties:
       Protocol: email
       Endpoint: !Ref AlarmEmail
       TopicArn: !Ref AlertTopic
 
-  # 로그 보존 정책 -----------------------------------------------------------
-  # AgentCore가 생성하는 vended 로그 그룹에 보존 기간을 명시적으로 적용합니다.
-  AgentLogGroup:
-    Type: AWS::Logs::LogGroup
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+  # 내구성 알림 싱크 - 알람 통지를 잃지 않도록 SQS로 보관합니다.
+  # 이메일 구독이 불가한 계정에서도 토픽에 엔드포인트를 제공해,
+  # 통지가 유실되지 않고 다운스트림(Lambda/티켓팅 등)에서 소비할 수 있게 합니다.
+  AlertQueue:
+    Type: AWS::SQS::Queue
     Properties:
-      LogGroupName: !Ref AgentLogGroupName
-      RetentionInDays: !Ref LogRetentionDays
+      QueueName: restaurant-agent-alerts
+      MessageRetentionPeriod: 1209600  # 14일
+
+  AlertQueueSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      Endpoint: !GetAtt AlertQueue.Arn
+      TopicArn: !Ref AlertTopic
+      RawMessageDelivery: true
+
+  AlertQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref AlertQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowSNSPublish
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt AlertQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref AlertTopic
+
+  # 참고: AgentCore Runtime이 생성하는 vended 로그 그룹
+  # (/aws/bedrock-agentcore/runtimes/<id>-<endpoint>)은 서비스가 소유하므로
+  # 이 스택에서 새로 만들지 않습니다. 보존 기간은 멱등한 CLI로 설정합니다:
+  #   aws logs put-retention-policy --log-group-name <name> --retention-in-days 30
 
   # 알람 --------------------------------------------------------------------
   SystemErrorsAlarm:
@@ -61,6 +102,13 @@ Resources:
       AlarmDescription: 서버측 오류(SystemErrors) 발생 - 인프라/서비스 문제 신호
       Namespace: AWS/Bedrock-AgentCore
       MetricName: SystemErrors
+      Dimensions:
+        - Name: Resource
+          Value: !Ref AgentRuntimeArn
+        - Name: Operation
+          Value: !Ref InvocationOperation
+        - Name: Name
+          Value: !Ref EndpointMetricName
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
@@ -77,6 +125,13 @@ Resources:
       AlarmDescription: 요청 쓰로틀 발생 - 쿼터/TPS 한도 검토 필요
       Namespace: AWS/Bedrock-AgentCore
       MetricName: Throttles
+      Dimensions:
+        - Name: Resource
+          Value: !Ref AgentRuntimeArn
+        - Name: Operation
+          Value: !Ref InvocationOperation
+        - Name: Name
+          Value: !Ref EndpointMetricName
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
@@ -92,6 +147,13 @@ Resources:
       AlarmDescription: p99 응답 지연이 임계값을 초과
       Namespace: AWS/Bedrock-AgentCore
       MetricName: Latency
+      Dimensions:
+        - Name: Resource
+          Value: !Ref AgentRuntimeArn
+        - Name: Operation
+          Value: !Ref InvocationOperation
+        - Name: Name
+          Value: !Ref EndpointMetricName
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 3
@@ -131,12 +193,13 @@ Resources:
               "properties": {
                 "title": "Invocations / Errors",
                 "region": "${AWS::Region}",
+                "period": 60,
                 "stacked": false,
                 "metrics": [
-                  [ "AWS/Bedrock-AgentCore", "Invocations", { "stat": "Sum" } ],
-                  [ "AWS/Bedrock-AgentCore", "SystemErrors", { "stat": "Sum" } ],
-                  [ "AWS/Bedrock-AgentCore", "UserErrors", { "stat": "Sum" } ],
-                  [ "AWS/Bedrock-AgentCore", "Throttles", { "stat": "Sum" } ]
+                  [ "AWS/Bedrock-AgentCore", "Invocations", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ],
+                  [ "AWS/Bedrock-AgentCore", "SystemErrors", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ],
+                  [ "AWS/Bedrock-AgentCore", "UserErrors", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ],
+                  [ "AWS/Bedrock-AgentCore", "Throttles", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ]
                 ]
               }
             },
@@ -145,9 +208,10 @@ Resources:
               "properties": {
                 "title": "Latency (p50/p99)",
                 "region": "${AWS::Region}",
+                "period": 60,
                 "metrics": [
-                  [ "AWS/Bedrock-AgentCore", "Latency", { "stat": "p50" } ],
-                  [ "AWS/Bedrock-AgentCore", "Latency", { "stat": "p99" } ]
+                  [ "AWS/Bedrock-AgentCore", "Latency", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "p50" } ],
+                  [ "AWS/Bedrock-AgentCore", "Latency", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "p99" } ]
                 ]
               }
             },
@@ -156,6 +220,7 @@ Resources:
               "properties": {
                 "title": "Active Sessions",
                 "region": "${AWS::Region}",
+                "period": 60,
                 "metrics": [
                   [ "AWS/Bedrock-AgentCore", "ActiveSessionCount", "Service", "AgentCore.Runtime", { "stat": "Maximum" } ]
                 ]
@@ -168,6 +233,9 @@ Outputs:
   AlertTopicArn:
     Description: 알람 통지 SNS 토픽 ARN
     Value: !Ref AlertTopic
+  AlertQueueUrl:
+    Description: 알림을 보관하는 SQS 큐 URL
+    Value: !Ref AlertQueue
   DashboardName:
     Description: CloudWatch 대시보드 이름
     Value: !Ref Dashboard

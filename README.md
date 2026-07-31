@@ -181,19 +181,54 @@ AI 에이전트의 신뢰 경계는 인증 없는 PUBLIC 입력에서 시작합�
 
 AgentCore Runtime은 `AWS/Bedrock-AgentCore` 네임스페이스로 메트릭(Invocations, SystemErrors, Throttles, Latency, ActiveSessionCount)을 발행합니다. 이를 코드로 감시합니다.
 
-- [`infra/observability/cloudwatch.yaml`](infra/observability/cloudwatch.yaml): 로그 보존, 서버 오류·쓰로틀·p99 지연·활성 세션 급증 알람, SNS 통지, 대시보드를 선언한 CloudFormation 템플릿.
-- [`ops/07_observability_check.py`](ops/07_observability_check.py): 알람 상태와 최근 메트릭을 요약하는 읽기 전용 점검 스크립트(ALARM 시 exit 1).
+- [`infra/observability/cloudwatch.yaml`](infra/observability/cloudwatch.yaml): 서버 오류·쓰로틀·p99 지연·활성 세션 급증 알람, SNS 통지 + SQS 내구성 싱크, 대시보드를 선언한 CloudFormation 템플릿. 알람은 SNS로 발행되고, 통지 유실을 막기 위해 SQS 큐가 구독합니다(이메일 구독이 불가한 계정에서도 동작).
+- [`ops/07_observability_check.py`](ops/07_observability_check.py): 최근 `Invocations`에서 실제 `Resource`/`Operation`/`Name` 차원을 자동 발견하고, 알람 상태와 최근 메트릭을 요약하는 읽기 전용 점검 스크립트(ALARM 시 exit 1).
+
+### 실배포 검증
+
+`us-west-2`에 관찰성 스택을 실제 배포하고 AgentCore Runtime 스모크 호출 3건으로 대시보드와 알람의 데이터 연결을 검증했습니다.
+
+| 검증 항목 | 결과 |
+| --- | --- |
+| CloudFormation | `restaurant-agent-observability` — `UPDATE_COMPLETE` |
+| CloudWatch 알람 | SystemErrors, Throttles, Latency p99, ActiveSessionCount 4개 생성·모두 `OK` |
+| CloudWatch 대시보드 | `restaurant-agent-observability` — 호출·오류·지연·활성 세션 데이터 표시 확인 |
+| 알림 경로 | `restaurant-agent-alerts` SNS → 동명 SQS 구독 1개, 메시지 보존 14일 |
+| 런타임 로그 | `DEFAULT`, `production` vended 로그 그룹에 보존 기간 30일 적용 |
+
+| 스모크 호출 실측 메트릭 | 값 |
+| --- | ---: |
+| Invocations (Sum) | 3 |
+| SystemErrors / UserErrors / Throttles (Sum) | 0 / 0 / 0 |
+| Latency (p99) | 3,818 ms |
+
+> 위 수치는 기능 연결을 확인한 소규모 스모크 테스트 결과이며 성능 벤치마크나 SLO를 의미하지 않습니다. 대시보드에는 AgentCore가 발행한 정확한 `Resource`/`Operation`/`Name` 차원을 사용합니다.
 
 ```powershell
-# 관찰성 스택 배포 (이메일 SNS 구독 확인 필요)
+# 관찰성 스택 배포 (AlarmEmail은 선택 파라미터)
 aws cloudformation deploy `
   --template-file infra/observability/cloudwatch.yaml `
   --stack-name restaurant-agent-observability `
-  --parameter-overrides [email protected]
+  --parameter-overrides `
+    AgentRuntimeArn="<runtime-arn>" `
+    EndpointMetricName="<agent-name>::<endpoint-name>" `
+    InvocationOperation="InvokeAgentRuntime"
+
+# 이메일 구독이 허용된 계정만 위 명령에 AlarmEmail="<alert-email>"을 추가합니다.
+
+# AgentCore 서비스 소유 vended 로그 그룹에 보존 기간을 멱등하게 적용
+aws logs put-retention-policy `
+  --log-group-name "/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT" `
+  --retention-in-days 30
+aws logs put-retention-policy `
+  --log-group-name "/aws/bedrock-agentcore/runtimes/<runtime-id>-production" `
+  --retention-in-days 30
 
 # 운영 상태 점검 (읽기 전용)
-uv run python ops/07_observability_check.py --window-min 60
+uv run python ops/07_observability_check.py --window-min 30
 ```
+
+> 참고: 일부 워크숍/샌드박스 계정은 SNS 이메일 구독을 차단합니다. 이 경우 `AlarmEmail`을 생략하면 SNS→SQS 알림 경로와 알람·대시보드는 그대로 배포됩니다.
 
 ## 브랜치와 PR 단위
 
