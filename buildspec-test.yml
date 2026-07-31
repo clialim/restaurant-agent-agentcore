@@ -1,0 +1,12 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install "strands-agents>=1.43" "strands-agents-evals>=1.0" "bedrock-agentcore>=1.15"
+  build:
+    commands:
+      # 평균 점수 0.7 미만이면 exit 1 → 빌드 실패 → 파이프라인 차단
+      - python tests/eval_gate.py
