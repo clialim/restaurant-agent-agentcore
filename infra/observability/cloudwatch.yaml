@@ -22,6 +22,18 @@ Parameters:
     Type: Number
     Default: 50
     Description: 동시 활성 세션 급증 알람 임계값
+  AgentRuntimeArn:
+    Type: String
+    Default: arn:aws:bedrock-agentcore:us-west-2:262428258542:runtime/RestaurantAgent_RestaurantAgent-b4sWcjH7j6
+    Description: CloudWatch Resource 차원에 사용할 AgentCore Runtime ARN
+  EndpointMetricName:
+    Type: String
+    Default: RestaurantAgent_RestaurantAgent::DEFAULT
+    Description: CloudWatch Name 차원(AgentName::EndpointName)
+  InvocationOperation:
+    Type: String
+    Default: InvokeAgentRuntime
+    Description: CloudWatch Operation 차원
 
 Conditions:
   # 이메일이 제공된 경우에만 이메일 구독을 생성합니다.
@@ -90,6 +102,13 @@ Resources:
       AlarmDescription: 서버측 오류(SystemErrors) 발생 - 인프라/서비스 문제 신호
       Namespace: AWS/Bedrock-AgentCore
       MetricName: SystemErrors
+      Dimensions:
+        - Name: Resource
+          Value: !Ref AgentRuntimeArn
+        - Name: Operation
+          Value: !Ref InvocationOperation
+        - Name: Name
+          Value: !Ref EndpointMetricName
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
@@ -106,6 +125,13 @@ Resources:
       AlarmDescription: 요청 쓰로틀 발생 - 쿼터/TPS 한도 검토 필요
       Namespace: AWS/Bedrock-AgentCore
       MetricName: Throttles
+      Dimensions:
+        - Name: Resource
+          Value: !Ref AgentRuntimeArn
+        - Name: Operation
+          Value: !Ref InvocationOperation
+        - Name: Name
+          Value: !Ref EndpointMetricName
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
@@ -121,6 +147,13 @@ Resources:
       AlarmDescription: p99 응답 지연이 임계값을 초과
       Namespace: AWS/Bedrock-AgentCore
       MetricName: Latency
+      Dimensions:
+        - Name: Resource
+          Value: !Ref AgentRuntimeArn
+        - Name: Operation
+          Value: !Ref InvocationOperation
+        - Name: Name
+          Value: !Ref EndpointMetricName
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 3
@@ -160,12 +193,13 @@ Resources:
               "properties": {
                 "title": "Invocations / Errors",
                 "region": "${AWS::Region}",
+                "period": 60,
                 "stacked": false,
                 "metrics": [
-                  [ "AWS/Bedrock-AgentCore", "Invocations", { "stat": "Sum" } ],
-                  [ "AWS/Bedrock-AgentCore", "SystemErrors", { "stat": "Sum" } ],
-                  [ "AWS/Bedrock-AgentCore", "UserErrors", { "stat": "Sum" } ],
-                  [ "AWS/Bedrock-AgentCore", "Throttles", { "stat": "Sum" } ]
+                  [ "AWS/Bedrock-AgentCore", "Invocations", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ],
+                  [ "AWS/Bedrock-AgentCore", "SystemErrors", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ],
+                  [ "AWS/Bedrock-AgentCore", "UserErrors", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ],
+                  [ "AWS/Bedrock-AgentCore", "Throttles", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "Sum" } ]
                 ]
               }
             },
@@ -174,9 +208,10 @@ Resources:
               "properties": {
                 "title": "Latency (p50/p99)",
                 "region": "${AWS::Region}",
+                "period": 60,
                 "metrics": [
-                  [ "AWS/Bedrock-AgentCore", "Latency", { "stat": "p50" } ],
-                  [ "AWS/Bedrock-AgentCore", "Latency", { "stat": "p99" } ]
+                  [ "AWS/Bedrock-AgentCore", "Latency", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "p50" } ],
+                  [ "AWS/Bedrock-AgentCore", "Latency", "Resource", "${AgentRuntimeArn}", "Operation", "${InvocationOperation}", "Name", "${EndpointMetricName}", { "stat": "p99" } ]
                 ]
               }
             },
@@ -185,6 +220,7 @@ Resources:
               "properties": {
                 "title": "Active Sessions",
                 "region": "${AWS::Region}",
+                "period": 60,
                 "metrics": [
                   [ "AWS/Bedrock-AgentCore", "ActiveSessionCount", "Service", "AgentCore.Runtime", { "stat": "Maximum" } ]
                 ]

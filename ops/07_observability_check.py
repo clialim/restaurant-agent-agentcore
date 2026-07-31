@@ -21,7 +21,7 @@ import boto3
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 
-from _common import get_region, use_utf8_stdout  # noqa: E402
+from _common import get_region, get_runtime_arn, use_utf8_stdout  # noqa: E402
 
 NAMESPACE = "AWS/Bedrock-AgentCore"
 ALARM_PREFIX = "restaurant-agent-"
@@ -45,14 +45,33 @@ def summarize_alarms(cw) -> list[dict]:
     return alarms
 
 
-def recent_metric(cw, metric: str, stat: str, start, end) -> float | None:
+def discover_runtime_dimensions(cw, runtime_arn: str) -> list[dict]:
+    """실제 런타임 메트릭에서 Resource/Operation/Name 차원을 찾습니다."""
+    response = cw.list_metrics(
+        Namespace=NAMESPACE,
+        MetricName="Invocations",
+        Dimensions=[{"Name": "Resource", "Value": runtime_arn}],
+        RecentlyActive="PT3H",
+    )
+    candidates = response.get("Metrics", [])
+    for metric in candidates:
+        values = {d["Name"]: d["Value"] for d in metric.get("Dimensions", [])}
+        if values.get("Operation") == "InvokeAgentRuntime" and values.get("Name", "").endswith(
+            "::DEFAULT"
+        ):
+            return metric["Dimensions"]
+    return candidates[0]["Dimensions"] if candidates else []
+
+
+def recent_metric(cw, metric: str, stat: str, start, end, dimensions: list[dict]) -> float | None:
     """최근 창의 메트릭 집계값을 반환합니다. 데이터가 없으면 None."""
     kwargs = {
         "Namespace": NAMESPACE,
         "MetricName": metric,
+        "Dimensions": dimensions,
         "StartTime": start,
         "EndTime": end,
-        "Period": 3600,
+        "Period": 60,
     }
     if stat.startswith("p"):
         kwargs["ExtendedStatistics"] = [stat]
@@ -78,14 +97,21 @@ def main() -> int:
     args = parser.parse_args()
 
     region = get_region()
+    runtime_arn = get_runtime_arn()
     cw = boto3.client("cloudwatch", region_name=region)
 
     end = datetime.now(UTC)
     start = end - timedelta(minutes=args.window_min)
+    dimensions = discover_runtime_dimensions(cw, runtime_arn)
 
     print("=" * 60)
     print(f"관찰성 점검 (region={region}, 최근 {args.window_min}분)")
     print("=" * 60)
+    if dimensions:
+        values = {d["Name"]: d["Value"] for d in dimensions}
+        print(f"대상: {values.get('Name', runtime_arn)}")
+    else:
+        print("대상 런타임 메트릭 차원을 찾지 못했습니다(최근 호출 필요).")
 
     # 1. 알람 상태
     alarms = summarize_alarms(cw)
@@ -99,7 +125,7 @@ def main() -> int:
     # 2. 최근 메트릭 요약
     print("\n[최근 런타임 메트릭]")
     for metric, stat in METRIC_QUERIES:
-        value = recent_metric(cw, metric, stat, start, end)
+        value = recent_metric(cw, metric, stat, start, end, dimensions)
         if value is None:
             print(f"  - {metric} ({stat}): 데이터 없음")
         elif metric == "Latency":
