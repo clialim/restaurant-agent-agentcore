@@ -93,12 +93,12 @@ Resources:
                 - !Ref AgentRuntimeArn
                 - !Sub '${AgentRuntimeArn}/*'
       Events:
-        ChatForm:
+        HealthCheck:
           Type: HttpApi
           Properties:
             ApiId: !Ref DiningHttpApi
             Method: GET
-            Path: /
+            Path: /health
         Ask:
           Type: HttpApi
           Properties:

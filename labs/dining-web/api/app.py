@@ -1,18 +1,25 @@
 """dining-web Lambda 핸들러 — HTTP API(payload 2.0) 2라우트.
 
-- GET  /     : 채팅 폼 HTML을 반환(브라우저 렌더).
-- POST /ask  : {"prompt": "..."}를 받아 배포된 AgentCore Runtime을
-               invoke_agent_runtime으로 호출하고 {"answer": "..."}로 반환.
+- GET  /health : 상태 확인(shallow health check).
+- POST /ask    : {"prompt": "...", "sessionId": "..."}를 받아 배포된 AgentCore Runtime을
+                 invoke_agent_runtime으로 호출하고 {"answer": "...", "sessionId": "..."}로 반환.
+
+멀티턴 세션:
+- 클라이언트가 sessionId를 보내면 같은 대화로 이어갑니다.
+- sessionId가 없으면 서버에서 새로 생성합니다.
+- AgentCore runtimeSessionId 요구사항: 33자 이상, [a-zA-Z0-9_-] 포함.
 
 보안 관점:
 - 인증 없는 PUBLIC 진입점이므로 payload에서 신뢰 경계가 시작합니다.
   prompt의 존재·타입·길이를 모델 호출 전에 검증(fail-closed)합니다.
+- sessionId는 형식·길이만 검증하고 서버 상태를 저장하지 않습니다.
 - 사용자 입력 원문은 로그로 남기지 않습니다.
 """
 
 import base64
 import json
 import os
+import re
 import uuid
 
 import boto3
@@ -25,86 +32,12 @@ QUALIFIER = "DEFAULT"
 MAX_PROMPT_CHARS = 4000
 MIN_PROMPT_CHARS = 1
 
+# sessionId 검증: AgentCore runtimeSessionId는 33~100자, 알파벳·숫자·하이픈·언더스코어.
+SESSION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{33,100}$")
+SESSION_ID_PREFIX = "dining-web-"
+
 # 데이터 평면 클라이언트는 콜드 스타트 1회만 생성해 재사용합니다.
 _agent_client = boto3.client("bedrock-agentcore", region_name=REGION)
-
-
-# ---------------------------------------------------------------------------
-# 채팅 폼 (GET /)
-# ---------------------------------------------------------------------------
-
-CHAT_FORM_HTML = """<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>강남 식당 컨시어지</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-           max-width: 720px; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
-    h1 { font-size: 1.4rem; }
-    .row { display: flex; gap: .5rem; margin: 1rem 0; }
-    input { flex: 1; padding: .7rem; font-size: 1rem; border: 1px solid #888;
-            border-radius: 8px; }
-    button { padding: .7rem 1.2rem; font-size: 1rem; border: 0; border-radius: 8px;
-             background: #2f6feb; color: #fff; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: progress; }
-    #answer { white-space: pre-wrap; padding: 1rem; border: 1px solid #8884;
-              border-radius: 8px; min-height: 3rem; background: #8881; }
-    .hint { color: #888; font-size: .85rem; }
-  </style>
-</head>
-<body>
-  <h1>강남 식당 컨시어지</h1>
-  <p class="hint">예: 강남역 근처 이탈리안 식당 추천해 주세요</p>
-  <div class="row">
-    <input id="prompt" type="text" placeholder="식당을 물어보세요"
-           autofocus autocomplete="off">
-    <button id="send">전송</button>
-  </div>
-  <div id="answer" aria-live="polite"></div>
-  <script>
-    const input = document.getElementById("prompt");
-    const button = document.getElementById("send");
-    const answer = document.getElementById("answer");
-
-    async function ask() {
-      const prompt = input.value.trim();
-      if (!prompt) { input.focus(); return; }
-      button.disabled = true;
-      answer.textContent = "생각 중...";
-      try {
-        const res = await fetch("/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt })
-        });
-        const data = await res.json();
-        answer.textContent = res.ok
-          ? (data.answer ?? JSON.stringify(data))
-          : ("오류: " + (data.error ?? res.status));
-      } catch (err) {
-        answer.textContent = "요청 실패: " + err;
-      } finally {
-        button.disabled = false;
-      }
-    }
-
-    button.addEventListener("click", ask);
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
-  </script>
-</body>
-</html>
-"""
-
-
-def _html_response(status: int, html: str) -> dict:
-    return {
-        "statusCode": status,
-        "headers": {"Content-Type": "text/html; charset=utf-8"},
-        "body": html,
-    }
 
 
 def _json_response(status: int, body: dict) -> dict:
@@ -178,8 +111,28 @@ def _extract_answer(raw: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_prompt(event: dict) -> str:
-    """요청 본문에서 prompt를 꺼내 검증합니다(fail-closed)."""
+def _generate_session_id() -> str:
+    """AgentCore runtimeSessionId 요구사항(33자 이상)을 만족하는 새 세션 ID를 생성합니다."""
+    return f"{SESSION_ID_PREFIX}{uuid.uuid4().hex}"
+
+
+def _validate_session_id(session_id: str | None) -> str:
+    """클라이언트 제공 sessionId를 검증하거나 새로 생성합니다."""
+    if not session_id:
+        return _generate_session_id()
+    if not isinstance(session_id, str):
+        raise ValueError("sessionId는 문자열이어야 합니다.")
+    if not SESSION_ID_PATTERN.match(session_id):
+        raise ValueError("sessionId 형식이 올바르지 않습니다. 33~100자의 영문·숫자·하이픈·언더스코어만 허용됩니다.")
+    return session_id
+
+
+def _parse_request(event: dict) -> tuple[str, str]:
+    """요청 본문에서 prompt와 sessionId를 꺼내 검증합니다(fail-closed).
+
+    Returns:
+        (prompt, session_id) 튜플
+    """
     body = event.get("body") or ""
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body).decode("utf-8")
@@ -198,12 +151,14 @@ def _parse_prompt(event: dict) -> str:
         raise ValueError("prompt가 비어 있습니다.")
     if len(prompt) > MAX_PROMPT_CHARS:
         raise ValueError(f"prompt가 너무 깁니다. 최대 {MAX_PROMPT_CHARS}자까지 허용됩니다.")
-    return prompt
+
+    session_id = _validate_session_id(parsed.get("sessionId"))
+    return prompt, session_id
 
 
 def handle_ask(event: dict) -> dict:
     try:
-        prompt = _parse_prompt(event)
+        prompt, session_id = _parse_request(event)
     except ValueError as exc:
         return _json_response(400, {"error": str(exc)})
 
@@ -211,8 +166,7 @@ def handle_ask(event: dict) -> dict:
         response = _agent_client.invoke_agent_runtime(
             agentRuntimeArn=AGENT_RUNTIME_ARN,
             qualifier=QUALIFIER,
-            # runtimeSessionId은 33자 이상이어야 합니다.
-            runtimeSessionId=f"dining-web-{uuid.uuid4().hex}",
+            runtimeSessionId=session_id,
             payload=json.dumps({"prompt": prompt}).encode("utf-8"),
         )
         raw = response["response"].read().decode("utf-8")
@@ -220,14 +174,14 @@ def handle_ask(event: dict) -> dict:
         return _json_response(502, {"error": "에이전트 호출에 실패했습니다."})
 
     answer = _extract_answer(raw)
-    return _json_response(200, {"answer": answer})
+    return _json_response(200, {"answer": answer, "sessionId": session_id})
 
 
 def lambda_handler(event, _context):
     route_key = event.get("routeKey", "")
 
-    if route_key == "GET /":
-        return _html_response(200, CHAT_FORM_HTML)
+    if route_key == "GET /health":
+        return _json_response(200, {"status": "ok"})
     if route_key == "POST /ask":
         return handle_ask(event)
 
