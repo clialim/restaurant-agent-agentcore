@@ -167,7 +167,8 @@ def handle_ask(event: dict) -> dict:
             agentRuntimeArn=AGENT_RUNTIME_ARN,
             qualifier=QUALIFIER,
             runtimeSessionId=session_id,
-            payload=json.dumps({"prompt": prompt}).encode("utf-8"),
+            # sessionId를 payload에도 포함해 에이전트가 세션별 대화 기억을 유지하도록 합니다.
+            payload=json.dumps({"prompt": prompt, "sessionId": session_id}).encode("utf-8"),
         )
         raw = response["response"].read().decode("utf-8")
     except Exception:  # noqa: BLE001 — 내부 오류 상세는 사용자에게 노출하지 않습니다.
