@@ -252,7 +252,9 @@ Resources:
                   - cloudformation:GetTemplate
                   - cloudformation:ListStackResources
                   - cloudformation:UpdateStack
-                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dining-web/*'
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dining-web/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
               - Sid: InspectCloudFormation
                 Effect: Allow
                 Action:
