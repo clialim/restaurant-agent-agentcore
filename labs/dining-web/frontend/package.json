@@ -10,17 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@cloudscape-design/chat-components": "^1.0.156",
-    "@cloudscape-design/components": "^3.0.1340",
-    "@cloudscape-design/global-styles": "^1.0.65",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "@cloudscape-design/chat-components": "1.0.156",
+    "@cloudscape-design/components": "3.0.1340",
+    "@cloudscape-design/global-styles": "1.0.65",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.4",
-    "oxlint": "^1.75.0",
-    "vite": "^8.2.0"
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.4",
+    "oxlint": "1.75.0",
+    "vite": "8.2.0"
   }
 }

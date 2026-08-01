@@ -1,0 +1,45 @@
+version: 0.2
+
+env:
+  variables:
+    UV_VERSION: '0.10.6'
+    SAM_CLI_VERSION: '1.164.0'
+    SAM_STACK_NAME: 'dining-web'
+  exported-variables:
+    - API_URL
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.13
+    commands:
+      - pip install "uv==$UV_VERSION"
+  pre_build:
+    commands:
+      - test -n "$AGENT_RUNTIME_ARN" && test "$AGENT_RUNTIME_ARN" != "None"
+      - test -n "$FRONTEND_ORIGIN"
+      - test -n "$SAM_ARTIFACT_BUCKET"
+      - uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam validate --lint --region "$AWS_REGION" --template-file labs/dining-web/template.yaml
+  build:
+    commands:
+      - uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam build --template-file labs/dining-web/template.yaml --build-dir labs/dining-web/.aws-sam-ci/deploy
+      - >-
+        uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam deploy
+        --template-file labs/dining-web/.aws-sam-ci/deploy/template.yaml
+        --stack-name "$SAM_STACK_NAME"
+        --region "$AWS_REGION"
+        --s3-bucket "$SAM_ARTIFACT_BUCKET"
+        --s3-prefix sam/dining-web
+        --capabilities CAPABILITY_IAM
+        --no-confirm-changeset
+        --no-fail-on-empty-changeset
+        --parameter-overrides
+        AgentRuntimeArn="$AGENT_RUNTIME_ARN"
+        FrontendOrigin="$FRONTEND_ORIGIN"
+        AlarmTopicArn="$ALARM_TOPIC_ARN"
+  post_build:
+    commands:
+      - API_URL=$(aws cloudformation describe-stacks --stack-name "$SAM_STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue | [0]" --output text)
+      - test -n "$API_URL" && test "$API_URL" != "None"
+      - export API_URL
+      - echo "API URL exported for the frontend deploy action"

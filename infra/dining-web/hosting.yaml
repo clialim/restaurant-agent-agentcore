@@ -1,0 +1,185 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  비공개 S3 버킷과 CloudFront를 사용하는 dining-web 정적 웹 호스팅 및 월간 비용 예산 구성
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: dining-web
+    Description: 리소스 이름과 태그에 사용할 안전한 프로젝트 이름
+    MinLength: 3
+    MaxLength: 30
+    AllowedPattern: '^[a-z][a-z0-9-]*[a-z0-9]$'
+    ConstraintDescription: 소문자로 시작하고 소문자, 숫자, 하이픈만 사용하며 소문자 또는 숫자로 끝나야 합니다.
+  MonthlyBudgetAmount:
+    Type: Number
+    Default: 10
+    Description: 월간 비용 예산 한도(USD)
+    MinValue: 0.01
+  BudgetEmail:
+    Type: String
+    Default: ''
+    Description: 예산 80% 초과 알림 수신 이메일(비워 두면 알림을 생성하지 않음)
+
+Conditions:
+  HasBudgetEmail: !Not
+    - !Equals
+      - !Ref BudgetEmail
+      - ''
+
+Resources:
+  # 원본은 공개하지 않고 CloudFront OAC를 통해서만 읽도록 구성합니다.
+  StaticBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanUpOldVersionsAndMultipartUploads
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Description: !Sub '${ProjectName} S3 원본 접근 제어'
+        Name: !Sub '${ProjectName}-${AWS::Region}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub '${ProjectName} 정적 웹 배포'
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 0
+            ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCachingMinTTL: 0
+            ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ResponseHeadersPolicyId: 67f7725c-6f97-4210-82d7-5512b31e9d03
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - DomainName: !GetAtt StaticBucket.RegionalDomainName
+            Id: S3Origin
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        PriceClass: PriceClass_100
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # 배포 ARN이 일치하는 CloudFront 서비스 주체에만 객체 읽기를 허용합니다.
+  StaticBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt StaticBucket.Arn
+              - !Sub '${StaticBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${StaticBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'
+
+  MonthlyCostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetAmount
+          Unit: USD
+        BudgetName: !Sub '${ProjectName}-monthly-cost'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+      NotificationsWithSubscribers: !If
+        - HasBudgetEmail
+        - - Notification:
+              ComparisonOperator: GREATER_THAN
+              NotificationType: ACTUAL
+              Threshold: 80
+              ThresholdType: PERCENTAGE
+            Subscribers:
+              - Address: !Ref BudgetEmail
+                SubscriptionType: EMAIL
+        - !Ref AWS::NoValue
+
+Outputs:
+  BucketName:
+    Description: 정적 파일을 저장하는 S3 버킷 이름
+    Value: !Ref StaticBucket
+    Export:
+      Name: DiningWebStaticBucketName
+  DistributionId:
+    Description: CloudFront 배포 ID
+    Value: !Ref Distribution
+    Export:
+      Name: DiningWebDistributionId
+  DistributionDomainName:
+    Description: CloudFront 배포 도메인 이름
+    Value: !GetAtt Distribution.DomainName
+    Export:
+      Name: DiningWebDistributionDomainName
+  WebsiteUrl:
+    Description: HTTPS 웹사이트 URL
+    Value: !Sub 'https://${Distribution.DomainName}'
+    Export:
+      Name: DiningWebWebsiteUrl
