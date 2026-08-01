@@ -7,32 +7,67 @@ Description: >
 Parameters:
   AgentRuntimeArn:
     Type: String
-    Description: >
-      호출할 AgentCore Runtime의 ARN. 하드코딩하지 않고 배포 시 입력받아
-      sam deploy --guided 응답이 samconfig.toml에 저장됩니다.
+    Description: 호출할 AgentCore Runtime ARN
     AllowedPattern: '^arn:aws:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:runtime/.+$'
     ConstraintDescription: 유효한 bedrock-agentcore runtime ARN이어야 합니다.
+  FrontendOrigin:
+    Type: String
+    Default: https://example.invalid
+    Description: >
+      배포된 프론트엔드 오리진(끝 슬래시 제외). localhost 개발 오리진은 별도로 허용됩니다.
+    AllowedPattern: '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'
+    ConstraintDescription: http(s) 스킴과 호스트만 포함하고 끝 슬래시는 제외해야 합니다.
+  AlarmTopicArn:
+    Type: String
+    Default: ''
+    Description: API/Lambda 보호 알람을 전송할 SNS Topic ARN(비우면 알람만 생성)
+    AllowedPattern: '^$|^arn:aws[a-zA-Z-]*:sns:[a-z0-9-]+:[0-9]{12}:.+$'
+  ApiThrottleRateLimit:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: HTTP API 기본 route 초당 지속 요청 한도
+  ApiThrottleBurstLimit:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: HTTP API 기본 route 순간 요청 한도
+  LambdaReservedConcurrency:
+    Type: Number
+    Default: 5
+    MinValue: 1
+    Description: DiningFunction 예약 동시성(AgentCore 비용·쿼터 보호)
+  ApiRequestVolumeThreshold:
+    Type: Number
+    Default: 500
+    MinValue: 1
+    Description: 5분간 API 요청량 알람 임계값
+
+Conditions:
+  HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, '']]
 
 Globals:
   Function:
-    # 기본 3초로는 에이전트 호출이 타임아웃됩니다 — 이 미션의 필수 값.
+    # 기본 3초로는 에이전트 호출이 타임아웃됩니다. 단, HTTP API 통합 상한은 30초입니다.
     Timeout: 60
     MemorySize: 256
     Runtime: python3.13
 
 Resources:
-  # 명시적 HTTP API — CORS 등 API 속성을 붙일 자리를 확보하기 위해 암묵 생성 대신 선언.
   DiningHttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
-      # HTTP API는 payload 2.0을 사용합니다(event["routeKey"] 분기).
       StageName: $default
-      # CORS는 이 HttpApi 리소스 속성으로만 지정합니다(Globals.HttpApi에는 없음).
-      # 게이트웨이가 preflight(OPTIONS)와 Access-Control-Allow-Origin을 처리하므로
-      # Lambda 코드는 그대로 둡니다. 와일드카드(*) 대신 로컬 dev 오리진만 허용합니다.
+      # PUBLIC 데모 API 남용을 줄이기 위해 모든 route에 기본 throttling을 적용합니다.
+      DefaultRouteSettings:
+        DetailedMetricsEnabled: true
+        ThrottlingBurstLimit: !Ref ApiThrottleBurstLimit
+        ThrottlingRateLimit: !Ref ApiThrottleRateLimit
+      # CORS는 명시적 HttpApi 리소스에 지정합니다(Globals.HttpApi에는 없음).
       CorsConfiguration:
         AllowOrigins:
           - http://localhost:5173
+          - !Ref FrontendOrigin
         AllowMethods:
           - GET
           - POST
@@ -44,13 +79,12 @@ Resources:
     Properties:
       CodeUri: api/
       Handler: app.lambda_handler
+      ReservedConcurrentExecutions: !Ref LambdaReservedConcurrency
       Environment:
         Variables:
           AGENT_RUNTIME_ARN: !Ref AgentRuntimeArn
       Policies:
-        # InvokeAgentRuntime은 런타임과 엔드포인트의 이중 인가입니다.
-        # 런타임 ARN만으로는 DEFAULT 엔드포인트 호출이 AccessDenied가 나므로
-        # "${AgentRuntimeArn}/*"(엔드포인트)까지 함께 허용합니다.
+        # InvokeAgentRuntime은 런타임과 DEFAULT 등 하위 엔드포인트 양쪽 인가가 필요합니다.
         - Statement:
             - Effect: Allow
               Action:
@@ -72,10 +106,101 @@ Resources:
             Method: POST
             Path: /ask
 
+  DiningApiRequestVolumeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: dining-web-api-request-volume
+      AlarmDescription: 5분간 PUBLIC API 호출량 급증 감지
+      Namespace: AWS/ApiGateway
+      MetricName: Count
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref DiningHttpApi
+        - Name: Stage
+          Value: $default
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Ref ApiRequestVolumeThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If
+        - HasAlarmTopic
+        - - !Ref AlarmTopicArn
+        - !Ref AWS::NoValue
+
+  DiningApi5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: dining-web-api-5xx-errors
+      AlarmDescription: HTTP API 5XX 오류 발생
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref DiningHttpApi
+        - Name: Stage
+          Value: $default
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If
+        - HasAlarmTopic
+        - - !Ref AlarmTopicArn
+        - !Ref AWS::NoValue
+
+  DiningFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: dining-web-lambda-errors
+      AlarmDescription: DiningFunction 처리 오류 발생
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DiningFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If
+        - HasAlarmTopic
+        - - !Ref AlarmTopicArn
+        - !Ref AWS::NoValue
+
+  DiningFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: dining-web-lambda-throttles
+      AlarmDescription: 예약 동시성 초과 또는 Lambda throttling 발생
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref DiningFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If
+        - HasAlarmTopic
+        - - !Ref AlarmTopicArn
+        - !Ref AWS::NoValue
+
 Outputs:
   ApiUrl:
-    Description: 채팅 폼 URL — 브라우저로 열어 질문을 입력합니다.
+    Description: HTTP API 엔드포인트
     Value: !Sub 'https://${DiningHttpApi}.execute-api.${AWS::Region}.amazonaws.com/'
+  ApiId:
+    Description: HTTP API ID
+    Value: !Ref DiningHttpApi
   FunctionArn:
     Description: DiningFunction Lambda ARN
     Value: !GetAtt DiningFunction.Arn

@@ -1,16 +1,27 @@
 version: 0.2
 
+env:
+  variables:
+    AGENTCORE_CLI_VERSION: '0.25.0'
+    UV_VERSION: '0.10.6'
+    AGENT_RUNTIME_NAME: 'RestaurantAgent_RestaurantAgent'
+  exported-variables:
+    - AGENT_RUNTIME_ARN
+
 phases:
   install:
     runtime-versions:
-      nodejs: 20
+      nodejs: 22
       python: 3.13
     commands:
-      # 배포 도구를 고정 버전으로 설치해 재현성을 확보합니다.
-      - npm install -g @aws/[email protected]
-      - pip install uv==0.10.6
+      - npm install -g "@aws/agentcore@$AGENTCORE_CLI_VERSION"
+      - pip install "uv==$UV_VERSION"
   build:
     commands:
-      # -y: 확인 프롬프트 자동 승인 (비대화형)
-      # -v: 리소스 단위 배포 이벤트를 빌드 로그에 출력
+      # 검증된 기존 AgentCore 배포 권한으로 비대화식 배포합니다.
       - agentcore deploy -y -v
+      # 후속 SAM API 단계가 동일 실행에서 방금 배포된 런타임 ARN을 사용하도록 export합니다.
+      - AGENT_RUNTIME_ARN=$(aws bedrock-agentcore-control list-agent-runtimes --region "$AWS_REGION" --query "agentRuntimes[?agentRuntimeName=='$AGENT_RUNTIME_NAME'].agentRuntimeArn | [0]" --output text)
+      - test -n "$AGENT_RUNTIME_ARN" && test "$AGENT_RUNTIME_ARN" != "None"
+      - export AGENT_RUNTIME_ARN
+      - echo "Agent runtime ARN exported for the next action"

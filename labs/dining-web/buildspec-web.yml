@@ -1,0 +1,24 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 22
+  pre_build:
+    commands:
+      - test -n "$API_URL" && test "$API_URL" != "None"
+      - test -n "$STATIC_BUCKET_NAME"
+      - test -n "$CLOUDFRONT_DISTRIBUTION_ID"
+      - npm ci --prefix labs/dining-web/frontend --ignore-scripts || npm install --prefix labs/dining-web/frontend --ignore-scripts
+  build:
+    commands:
+      - VITE_API_URL="$API_URL" npm run build --prefix labs/dining-web/frontend
+      # 해시 자산은 장기 캐시, 나머지 정적 파일은 짧은 캐시, index.html은 항상 재검증합니다.
+      - aws s3 sync labs/dining-web/frontend/dist/ "s3://$STATIC_BUCKET_NAME/" --exclude "index.html" --exclude "assets/*" --cache-control "public,max-age=3600"
+      - aws s3 sync labs/dining-web/frontend/dist/assets/ "s3://$STATIC_BUCKET_NAME/assets/" --cache-control "public,max-age=31536000,immutable"
+      - aws s3 cp labs/dining-web/frontend/dist/index.html "s3://$STATIC_BUCKET_NAME/index.html" --content-type "text/html; charset=utf-8" --cache-control "no-cache,no-store,must-revalidate"
+  post_build:
+    commands:
+      - INVALIDATION_ID=$(aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths "/" "/index.html" --query "Invalidation.Id" --output text)
+      - aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$INVALIDATION_ID"
+      - echo "Frontend deployed to https://$CLOUDFRONT_DOMAIN"

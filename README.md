@@ -14,9 +14,9 @@ Strands Agents SDK로 구현한 AI 에이전트를 Amazon Bedrock AgentCore Runt
 | --- | --- |
 | DevSecOps | CI에 SAST(Bandit)·의존성 CVE(pip-audit)·시크릿(detect-secrets)·lockfile 고정을 fail-fast 게이트로 통합 |
 | AI Security | 프롬프트 주입/역할 탈취/도구 노출/간접 주입/범위 이탈 평가를 fail-closed로 차단, 입력 검증·예약 안전 통제, 위협 모델 문서화 |
-| Cloud Engineer | 버전·엔드포인트 카나리 배포·롤백, CloudWatch 알람·대시보드 IaC(CloudFormation), 재현 가능한 배포 번들 |
+| Cloud Engineer | 버전·엔드포인트 카나리 배포·롤백, CloudWatch 알람·대시보드 IaC(CloudFormation), 재현 가능한 배포 번들, S3+CloudFront OAC 정적 호스팅, GitHub→CodePipeline 풀스택 CI/CD |
 
-기술 스택: Python 3.13 · uv · Strands Agents · Amazon Bedrock(Claude) · AgentCore Runtime · CodeBuild/CodePipeline · CloudFormation · CloudWatch
+기술 스택: Python 3.13 · uv · Strands Agents · Amazon Bedrock(Claude) · AgentCore Runtime · CodeBuild/CodePipeline · CloudFormation · CloudWatch · S3 · CloudFront OAC · SAM · Vite/React/Cloudscape
 
 ## 아키텍처
 
@@ -58,7 +58,8 @@ RestaurantAgent/
 │   ├── security_cases.py       # AI 보안 평가 케이스(프롬프트 주입 등)
 │   └── test_tools_security.py  # 결정적 보안 단위 테스트(입력·예약)
 ├── infra/
-│   └── observability/          # CloudWatch 알람·대시보드 CloudFormation
+│   ├── observability/          # CloudWatch 알람·대시보드 CloudFormation
+│   └── dining-web/             # 정적 호스팅(S3+CloudFront OAC) 및 풀스택 파이프라인 IaC
 ├── docs/
 │   └── threat-model.md         # STRIDE + OWASP LLM Top 10 위협 모델
 ├── buildspec-test.yml      # CodeBuild: 공급망·보안·품질 게이트
@@ -188,7 +189,73 @@ CorsConfiguration:
 | Part 3 | Cloudscape 채팅 프론트엔드 | 완료 — `frontend/`의 Vite + React + Cloudscape SPA |
 | Part 4 | CORS와 통합 | 완료 — `DiningHttpApi.CorsConfiguration`으로 로컬 오리진 허용 |
 
-브라우저의 Cloudscape 채팅 → HTTP API → Lambda → AgentCore Runtime까지 전체 경로가 연결되어 4개 Part를 모두 완료했습니다. 멀티턴 세션(`runtimeSessionId`)과 프론트엔드 정적 호스팅은 후속 개선 항목입니다.
+| Part 5 | 정적 호스팅 · 풀스택 파이프라인 · API 보호 | 완료 — 비공개 S3 + CloudFront OAC, GitHub→Test→Agent→API→Web 순차 배포, throttle/alarms/budget |
+
+### Part 5 — 비공개 호스팅 · 풀스택 CodePipeline · API 보호
+
+Cloudscape 프론트엔드를 비공개 S3 + CloudFront OAC로 공개하고, GitHub 커밋이 CodePipeline을 자동 실행해 품질·보안 게이트를 통과한 경우에만 Agent → API → Web을 순차 배포합니다.
+
+```mermaid
+flowchart LR
+    Git[GitHub push] --> Conn[CodeConnection]
+    Conn --> Source[Source]
+
+    subgraph Pipeline[restaurant-agent-fullstack-pipeline]
+        Source --> Test[Test<br/>Ruff · Bandit · pip-audit<br/>secrets · pytest · SAM lint<br/>Frontend lint/build<br/>LLM eval gate]
+        Test --> Agent[DeployAgent<br/>agentcore deploy<br/>→ export AGENT_RUNTIME_ARN]
+        Agent --> Api[DeployApi<br/>SAM deploy<br/>→ export API_URL]
+        Api --> Web[DeployWeb<br/>npm build → S3 sync<br/>CloudFront invalidation]
+    end
+
+    Web --> CF[CloudFront OAC<br/>d19w93f2jm1f7e.cloudfront.net]
+    CF --> S3[(Private S3)]
+    Api --> APIGW[HTTP API<br/>throttle 2/s · burst 5]
+    APIGW --> Lambda[DiningFunction<br/>reserved concurrency 5]
+```
+
+#### 정적 호스팅 (`infra/dining-web/hosting.yaml`)
+
+| 리소스 | 설명 |
+| --- | --- |
+| S3 Bucket | 비공개, BucketOwnerEnforced, AES256, 버전 관리, TLS 강제, 30일 lifecycle |
+| CloudFront OAC | sigv4 항상 서명, HTTPS redirect, SPA fallback, managed cache/security headers |
+| Bucket Policy | CloudFront 서비스 주체 + 배포 ARN 조건으로만 GetObject 허용 |
+| Budget | 월 $10, 80% 초과 시 이메일 알림 |
+
+#### 풀스택 파이프라인 (`infra/dining-web/pipeline.yaml`)
+
+| 구성 | 설명 |
+| --- | --- |
+| Source | GitHub CodeConnections, V2 QUEUED, branch detection |
+| Test | 전체 DevSecOps + LLM 평가 게이트 (fail → 배포 차단) |
+| Deploy | Agent(RunOrder 1) → API(RunOrder 2, dynamic ARN) → Web(RunOrder 3, dynamic URL) |
+| IAM | 계층별 최소 권한 역할 (Test / API / Web 분리) |
+
+#### API 보호 (`labs/dining-web/template.yaml` 추가)
+
+| 통제 | 값 | 목적 |
+| --- | --- | --- |
+| `DefaultRouteSettings.ThrottlingRateLimit` | 2 req/s | 지속 남용 제한 |
+| `DefaultRouteSettings.ThrottlingBurstLimit` | 5 | 순간 스파이크 흡수 |
+| `ReservedConcurrentExecutions` | 5 | Lambda/AgentCore 비용 보호 |
+| CloudWatch Alarms (4개) | Count, 5xx, Errors, Throttles | SNS 즉시 알림 |
+
+#### 배포 결과
+
+| 항목 | 값 |
+| --- | --- |
+| 프론트엔드 URL | `https://d19w93f2jm1f7e.cloudfront.net` |
+| API URL | `https://73f2kw1fp0.execute-api.us-west-2.amazonaws.com/` |
+| S3 직접 접근 | **403 Forbidden** (OAC 정상) |
+| 파이프라인 | `restaurant-agent-fullstack-pipeline` — 전 단계 Succeeded |
+| 기존 pipeline rule | `DISABLED` (기존 pipeline은 유지, 자동 실행만 방지) |
+
+#### 알려진 제한·후속 과제
+
+- Budget은 알림만 보내며 지출을 자동 차단하지 않습니다.
+- Agent 성공 후 API/Web이 실패하면 선행 배포는 자동 롤백되지 않습니다.
+- 인증 없는 공개 API이므로 프로덕션 전환 시 인증/WAF rate limit 추가 필요.
+
 
 ## CI/CD 파이프라인
 
@@ -339,6 +406,8 @@ uv run python ops/07_observability_check.py --window-min 30
 | 5 | `feature/ci-pipeline` | 평가 게이트 기반 CodeBuild/CodePipeline CI/CD 구성 |
 | 6 | `feature/eval-gate-demo` | 소스 번들 스크립트, 평가 게이트 실패/복구 검증 |
 | 7 | `feature/devsecops-hardening` | 보안 평가 게이트, 공급망 검사, 위협 모델, 관찰성 IaC |
+
+| 8 | `feature/dining-web-hosting-pipeline` | Part 5: 비공개 S3+CloudFront OAC 호스팅, GitHub 풀스택 파이프라인, API 보호 IaC |
 
 각 브랜치는 `main`에서 생성하고, 검토와 검증을 마친 뒤 PR을 squash merge하고 삭제합니다. 콘솔 확인만 필요한 Part 3은 별도 코드 브랜치로 나누지 않고 Part 2 PR의 검증 결과에 기록합니다.
 

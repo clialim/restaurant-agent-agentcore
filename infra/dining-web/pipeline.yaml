@@ -1,0 +1,604 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Full-stack dining-web pipeline from GitHub CodeConnections through test and ordered Agent, API, and Web deployments
+
+Parameters:
+  ConnectionArn:
+    Type: String
+    Description: AWS CodeConnections connection ARN for the GitHub repository
+    AllowedPattern: '^arn:aws[a-zA-Z-]*:codeconnections:[a-z0-9-]+:[0-9]{12}:connection/[A-Za-z0-9-]+$'
+    ConstraintDescription: Must be a valid AWS CodeConnections connection ARN.
+  FullRepositoryId:
+    Type: String
+    Default: clialim/restaurant-agent-agentcore
+    Description: Full GitHub repository ID in owner/repository format
+    AllowedPattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+  BranchName:
+    Type: String
+    Default: main
+    Description: GitHub branch tracked by the pipeline
+    MinLength: 1
+  PipelineName:
+    Type: String
+    Default: restaurant-agent-fullstack-pipeline
+    Description: CodePipeline name
+    AllowedPattern: '^[A-Za-z0-9.@_-]+$'
+    MinLength: 1
+    MaxLength: 100
+  AgentDeployRoleArn:
+    Type: String
+    Default: arn:aws:iam::262428258542:role/service-role/codebuild-restaurant-agent-deploy-service-role
+    Description: >-
+      Existing CodeBuild service role ARN for Agent deployment; it must allow AgentCore deployment and ListAgentRuntimes
+    AllowedPattern: '^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/.+$'
+  AlarmTopicArn:
+    Type: String
+    Default: arn:aws:sns:us-west-2:262428258542:restaurant-agent-alerts
+    Description: SNS topic ARN for dining-web API and Lambda protection alarms
+    AllowedPattern: '^arn:aws[a-zA-Z-]*:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]+$'
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanUpOldVersionsAndMultipartUploads
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  ArtifactBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ArtifactBucket.Arn
+              - !Sub '${ArtifactBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowAgentRoleListArtifactBucket
+            Effect: Allow
+            Principal:
+              AWS: !Ref AgentDeployRoleArn
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource: !GetAtt ArtifactBucket.Arn
+          - Sid: AllowAgentRoleReadArtifacts
+            Effect: Allow
+            Principal:
+              AWS: !Ref AgentDeployRoleArn
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource: !Sub '${ArtifactBucket.Arn}/*'
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PipelineArtifactAndActionAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ListArtifactBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Sid: ReadWriteArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: UseGitHubConnection
+                Effect: Allow
+                Action: codeconnections:UseConnection
+                Resource: !Ref ConnectionArn
+              - Sid: RunPipelineBuilds
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource:
+                  - !GetAtt TestProject.Arn
+                  - !GetAtt AgentDeployProject.Arn
+                  - !GetAtt ApiDeployProject.Arn
+                  - !GetAtt WebDeployProject.Arn
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  TestRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: TestBuildAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CreateTestLogGroup
+                Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-test:*'
+              - Sid: WriteTestLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-test:*'
+              - Sid: ListTestArtifactBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Sid: ReadTestArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: InvokeBedrockModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  ApiDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ApiDeploymentAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CreateApiLogGroup
+                Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-api:*'
+              - Sid: WriteApiLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-api:*'
+              - Sid: ListApiArtifactBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Sid: ReadWriteApiAndSamArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: ManageDiningWebStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:ListStackResources
+                  - cloudformation:UpdateStack
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/dining-web/*'
+                  - !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31'
+              - Sid: InspectCloudFormation
+                Effect: Allow
+                Action:
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ListStacks
+                  - cloudformation:ValidateTemplate
+                Resource: '*'
+              - Sid: ManageDiningWebFunctions
+                Effect: Allow
+                Action:
+                  - lambda:AddPermission
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:GetFunction
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:GetFunctionConcurrency
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetPolicy
+                  - lambda:GetRuntimeManagementConfig
+                  - lambda:ListTags
+                  - lambda:ListVersionsByFunction
+                  - lambda:PublishVersion
+                  - lambda:PutFunctionConcurrency
+                  - lambda:PutRuntimeManagementConfig
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:dining-web-*'
+              - Sid: ManageDiningWebHttpApi
+                Effect: Allow
+                Action:
+                  - apigateway:DELETE
+                  - apigateway:GET
+                  - apigateway:PATCH
+                  - apigateway:POST
+                  - apigateway:PUT
+                Resource: !Sub 'arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis*'
+              - Sid: ManageDiningWebExecutionRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRolePolicies
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/dining-web-*'
+              - Sid: ManageDiningWebAlarms
+                Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:ListTagsForResource
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                Resource: !Sub 'arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:dining-web-*'
+              - Sid: DescribeDiningWebAlarms
+                Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  WebDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WebDeploymentAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CreateWebLogGroup
+                Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-web:*'
+              - Sid: WriteWebLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-web:*'
+              - Sid: ReadPipelineArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource: !GetAtt ArtifactBucket.Arn
+              - Sid: GetPipelineArtifactObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: ListStaticWebsiteBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                Resource:
+                  Fn::Sub:
+                    - 'arn:${AWS::Partition}:s3:::${StaticBucketName}'
+                    - StaticBucketName:
+                        Fn::ImportValue: DiningWebStaticBucketName
+              - Sid: ManageStaticWebsiteObjects
+                Effect: Allow
+                Action:
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  Fn::Sub:
+                    - 'arn:${AWS::Partition}:s3:::${StaticBucketName}/*'
+                    - StaticBucketName:
+                        Fn::ImportValue: DiningWebStaticBucketName
+              - Sid: InvalidateDiningWebDistribution
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                Resource:
+                  Fn::Sub:
+                    - 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}'
+                    - DistributionId:
+                        Fn::ImportValue: DiningWebDistributionId
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  TestProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-test'
+      ServiceRole: !GetAtt TestRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-test.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  AgentDeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-agent'
+      ServiceRole: !Ref AgentDeployRoleArn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-deploy.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  ApiDeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      ServiceRole: !GetAtt ApiDeployRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: labs/dining-web/buildspec-api.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: FRONTEND_ORIGIN
+            Type: PLAINTEXT
+            Value:
+              Fn::Sub:
+                - 'https://${DistributionDomainName}'
+                - DistributionDomainName:
+                    Fn::ImportValue: DiningWebDistributionDomainName
+          - Name: SAM_ARTIFACT_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref ArtifactBucket
+          - Name: ALARM_TOPIC_ARN
+            Type: PLAINTEXT
+            Value: !Ref AlarmTopicArn
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  WebDeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-web'
+      ServiceRole: !GetAtt WebDeployRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: labs/dining-web/buildspec-web.yml
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: STATIC_BUCKET_NAME
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: DiningWebStaticBucketName
+          - Name: CLOUDFRONT_DISTRIBUTION_ID
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: DiningWebDistributionId
+          - Name: CLOUDFRONT_DOMAIN
+            Type: PLAINTEXT
+            Value:
+              Fn::ImportValue: DiningWebDistributionDomainName
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Ref PipelineName
+      RoleArn: !GetAtt PipelineRole.Arn
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RestartExecutionOnUpdate: false
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref FullRepositoryId
+                BranchName: !Ref BranchName
+                DetectChanges: 'true'
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+        - Name: Test
+          Actions:
+            - Name: Test
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref TestProject
+              InputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: DeployAgent
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref AgentDeployProject
+              InputArtifacts:
+                - Name: SourceArtifact
+              Namespace: AgentDeployVariables
+              RunOrder: 1
+            - Name: DeployApi
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref ApiDeployProject
+                EnvironmentVariables: '[{"name":"AGENT_RUNTIME_ARN","value":"#{AgentDeployVariables.AGENT_RUNTIME_ARN}","type":"PLAINTEXT"}]'
+              InputArtifacts:
+                - Name: SourceArtifact
+              Namespace: ApiDeployVariables
+              RunOrder: 2
+            - Name: DeployWeb
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref WebDeployProject
+                EnvironmentVariables: '[{"name":"API_URL","value":"#{ApiDeployVariables.API_URL}","type":"PLAINTEXT"}]'
+              InputArtifacts:
+                - Name: SourceArtifact
+              RunOrder: 3
+      Tags:
+        - Key: Project
+          Value: dining-web
+
+Outputs:
+  PipelineName:
+    Description: Name of the full-stack CodePipeline
+    Value: !Ref Pipeline
+  PipelineArn:
+    Description: ARN of the full-stack CodePipeline
+    Value: !Sub 'arn:${AWS::Partition}:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+  ArtifactBucketName:
+    Description: Name of the pipeline artifact S3 bucket
+    Value: !Ref ArtifactBucket
+  GitHubConnectionArn:
+    Description: GitHub CodeConnections ARN used by the source action
+    Value: !Ref ConnectionArn
