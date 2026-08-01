@@ -9,7 +9,7 @@ phases:
       - test -n "$API_URL" && test "$API_URL" != "None"
       - test -n "$STATIC_BUCKET_NAME"
       - test -n "$CLOUDFRONT_DISTRIBUTION_ID"
-      - npm ci --prefix labs/dining-web/frontend --omit=optional
+      - npm ci --prefix labs/dining-web/frontend
   build:
     commands:
       - VITE_API_URL="$API_URL" npm run build --prefix labs/dining-web/frontend
