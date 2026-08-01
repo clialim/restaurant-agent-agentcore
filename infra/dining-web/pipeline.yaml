@@ -168,7 +168,7 @@ Resources:
               - Sid: CreateTestLogGroup
                 Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-test'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-test:*'
               - Sid: WriteTestLogs
                 Effect: Allow
                 Action:
@@ -215,7 +215,7 @@ Resources:
               - Sid: CreateApiLogGroup
                 Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-api'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-api:*'
               - Sid: WriteApiLogs
                 Effect: Allow
                 Action:
@@ -349,7 +349,7 @@ Resources:
               - Sid: CreateWebLogGroup
                 Effect: Allow
                 Action: logs:CreateLogGroup
-                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-web'
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AWS::StackName}-web:*'
               - Sid: WriteWebLogs
                 Effect: Allow
                 Action:
