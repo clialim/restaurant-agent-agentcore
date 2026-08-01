@@ -251,6 +251,38 @@ SYSTEM_PROMPT = """\
 
 app = BedrockAgentCoreApp()
 
+# 세션별 Agent 인스턴스 캐시 — 멀티턴 대화 기억을 위해 대화 상태를 유지합니다.
+# AgentCore Runtime은 같은 runtimeSessionId를 격리된 동일 microVM으로 라우팅하므로,
+# 세션 키로 Agent를 재사용하면 Strands Agent가 self.messages에 대화를 누적합니다.
+_SESSION_AGENTS: dict[str, Agent] = {}
+
+
+def _build_agent() -> Agent:
+    """배포·평가와 동일한 구성의 Agent를 생성합니다."""
+    return Agent(
+        model=BedrockModel(model_id="us.anthropic.claude-sonnet-4-6", region_name=REGION),
+        system_prompt=SYSTEM_PROMPT,
+        tools=[search_restaurants, get_restaurant_reviews, check_reservations, create_reservation],
+        # 스트리밍 중간 결과를 콘솔로 출력하지 않음.
+        # Windows 콘솔(cp949)에서 이모지 응답 시 UnicodeEncodeError가 발생하므로 비활성화.
+        callback_handler=None,
+    )
+
+
+def _get_agent(session_id: str | None) -> Agent:
+    """세션 ID로 Agent를 조회하거나 새로 생성합니다.
+
+    같은 세션은 같은 Agent 인스턴스를 재사용해 이전 대화를 기억합니다.
+    세션 ID가 없으면 기억 없는 단발성 Agent를 매번 새로 만듭니다.
+    """
+    if not session_id:
+        return _build_agent()
+    agent = _SESSION_AGENTS.get(session_id)
+    if agent is None:
+        agent = _build_agent()
+        _SESSION_AGENTS[session_id] = agent
+    return agent
+
 
 def validate_prompt(payload: object) -> str:
     """payload에서 prompt를 꺼내 검증합니다.
@@ -281,14 +313,9 @@ async def invoke(payload):
         yield f"[요청 거부] {exc}"
         return
 
-    agent = Agent(
-        model=BedrockModel(model_id="us.anthropic.claude-sonnet-4-6", region_name=REGION),
-        system_prompt=SYSTEM_PROMPT,
-        tools=[search_restaurants, get_restaurant_reviews, check_reservations, create_reservation],
-        # 스트리밍 중간 결과를 콘솔로 출력하지 않음.
-        # Windows 콘솔(cp949)에서 이모지 응답 시 UnicodeEncodeError가 발생하므로 비활성화.
-        callback_handler=None,
-    )
+    # 세션 ID로 Agent를 재사용해 멀티턴 대화를 기억합니다.
+    session_id = payload.get("sessionId") if isinstance(payload, dict) else None
+    agent = _get_agent(session_id if isinstance(session_id, str) else None)
 
     stream = agent.stream_async(prompt)
     async for event in stream:
