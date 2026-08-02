@@ -97,24 +97,23 @@ uv sync --frozen
 
 배포된 RestaurantAgent를 콘솔이나 CLI 없이 브라우저에서 호출할 수 있도록 [`labs/dining-web/`](labs/dining-web/)에 AWS SAM 기반 프레젠테이션 계층을 추가했습니다. 기존 AgentCore Runtime과 에이전트 코드는 변경하지 않고, API Gateway HTTP API와 Lambda가 런타임을 호출합니다. 브라우저는 SigV4 서명이 필요한 `invoke_agent_runtime`을 직접 호출할 수 없으므로, 자격 증명을 가진 Lambda가 웹과 런타임 사이의 경계 역할을 합니다.
 
-프론트엔드는 두 가지입니다. Lambda가 `GET /`로 제공하는 무빌드 폴백 폼과, [`labs/dining-web/frontend/`](labs/dining-web/frontend/)의 Cloudscape 기반 React SPA입니다.
+프론트엔드는 [`labs/dining-web/frontend/`](labs/dining-web/frontend/)의 Cloudscape 기반 React SPA입니다. 서버는 상태 확인용 `GET /health`와 대화용 `POST /ask`만 제공합니다.
 
 ```mermaid
 flowchart LR
-    SPA[Cloudscape React SPA<br/>localhost:5173] -->|POST /ask · CORS| Api[API Gateway HTTP API]
-    Browser[브라우저 폴백 폼] -->|GET /| Api
+    SPA[Cloudscape React SPA] -->|POST /ask · sessionId · CORS| Api[API Gateway HTTP API]
     Api --> Lambda[DiningFunction<br/>Python 3.13 · Timeout 60초]
-    Lambda -->|InvokeAgentRuntime<br/>qualifier=DEFAULT| AgentCore[RestaurantAgent<br/>AgentCore Runtime]
+    Lambda -->|InvokeAgentRuntime<br/>runtimeSessionId=sessionId<br/>qualifier=DEFAULT| AgentCore[RestaurantAgent<br/>AgentCore Runtime]
     AgentCore -->|스트리밍 응답| Lambda
-    Lambda -->|answer| Api
+    Lambda -->|answer · sessionId| Api
 ```
 
 ### 구성과 API 계약
 
 | 경로 | 메서드 | 동작 |
 | --- | --- | --- |
-| `/` | GET | 입력창과 응답 영역이 있는 바닐라 JavaScript 채팅 폼 HTML 반환 |
-| `/ask` | POST | `{"prompt":"..."}` 요청으로 AgentCore Runtime을 호출하고 `{"answer":"..."}` 반환 |
+| `/health` | GET | 상태 확인(shallow health check) — `{"status":"ok"}` 반환 |
+| `/ask` | POST | `{"prompt":"...","sessionId":"..."}` 요청으로 AgentCore Runtime을 호출하고 `{"answer":"...","sessionId":"..."}` 반환. `sessionId`를 생략하면 서버가 새로 생성 |
 
 - [`labs/dining-web/template.yaml`](labs/dining-web/template.yaml): 명시적 `AWS::Serverless::HttpApi`, Python 3.13 Lambda, 60초 타임아웃, 런타임 ARN 파라미터와 IAM 정책 선언
 - [`labs/dining-web/api/app.py`](labs/dining-web/api/app.py): HTTP API payload 2.0 `routeKey` 분기, 입력 검증, AgentCore 호출, SSE·JSON·평문 응답 파싱
@@ -162,13 +161,33 @@ CorsConfiguration:
 
 `CorsConfiguration`은 `Globals.HttpApi`에는 없는 속성이라 명시적 `AWS::Serverless::HttpApi` 리소스에만 지정할 수 있습니다. 정적 호스팅으로 배포하면 그 도메인을 `AllowOrigins`에 추가합니다.
 
+### 멀티턴 대화 세션
+
+에이전트가 이전 대화를 기억하는 실제 멀티턴 채팅을 지원합니다. 화면에 메시지가 누적되는 것과 별개로, 에이전트도 같은 대화 맥락을 유지해야 "거기 예약 돼?" 같은 후속 질문이 성립합니다.
+
+```mermaid
+flowchart LR
+    First["1턴: prompt만 전송"] --> Server["서버가 sessionId 생성 → 응답에 포함"]
+    Server --> Keep["프론트가 sessionId 유지"]
+    Keep --> Next["2턴: prompt + 같은 sessionId 전송"]
+    Next --> Memory["같은 runtimeSessionId → 같은 microVM<br/>Agent 인스턴스 재사용 → 대화 기억"]
+    Keep -. 새 대화 버튼 .-> Reset["sessionId 초기화 → 새 세션"]
+```
+
+- **프론트엔드**: 첫 응답에서 받은 `sessionId`를 `useRef`로 유지하고 이후 요청에 재전송합니다. "새 대화" 버튼은 세션과 화면을 초기화합니다.
+- **Lambda**: `sessionId` 형식(33~100자, 영문·숫자·하이픈·언더스코어)을 검증하고 AgentCore `runtimeSessionId`와 payload에 함께 전달합니다. 없으면 서버에서 생성합니다.
+- **에이전트**: AgentCore Runtime은 같은 `runtimeSessionId`를 격리된 동일 microVM으로 라우팅합니다. 에이전트는 세션 ID로 Strands `Agent` 인스턴스를 캐시·재사용해 `self.messages`에 대화를 누적합니다. `runtimeSessionId`만으로는 기억이 생기지 않고, 에이전트가 대화 상태를 유지해야 한다는 점이 핵심입니다.
+
+> 세션 상태는 microVM 수명(최대 8시간) 동안 메모리에 유지됩니다. 재시작·확장을 넘어 지속되는 대화 이력이 필요하면 AgentCore Memory 같은 외부 저장소가 필요합니다. 인증이 없으므로 세션은 사용자별로 격리되지 않습니다(데모 범위).
+
 ### 실배포 검증
 
 | 검증 항목 | 결과 |
 | --- | --- |
 | CloudFormation | `dining-web` — `CREATE_COMPLETE` |
-| API Gateway | `GET /`, `POST /ask`, `$default` 스테이지 생성 |
+| API Gateway | `GET /health`, `POST /ask`, `$default` 스테이지 생성 |
 | Lambda | Python 3.13, `app.lambda_handler`, Timeout 60초, State `Active` |
+| 멀티턴 기억 | 후속 질문에서 직전 추천 식당을 기억, "새 대화"로 초기화 확인 |
 | 정상 요청 | “강남역 근처 이탈리안 식당 추천해 주세요” → “트라토리아 벨라” 포함 응답 |
 | 범위 제한 | 강남 외 지역 및 식당과 무관한 질문을 서비스 범위 안내로 거절 |
 | 프롬프트 보안 | 시스템 프롬프트 공개 요청을 거절하고 정상 사용 범위로 유도 |
@@ -188,8 +207,8 @@ CorsConfiguration:
 | Part 2 | 배포와 확인 | 완료 |
 | Part 3 | Cloudscape 채팅 프론트엔드 | 완료 — `frontend/`의 Vite + React + Cloudscape SPA |
 | Part 4 | CORS와 통합 | 완료 — `DiningHttpApi.CorsConfiguration`으로 로컬 오리진 허용 |
-
 | Part 5 | 정적 호스팅 · 풀스택 파이프라인 · API 보호 | 완료 — 비공개 S3 + CloudFront OAC, GitHub→Test→Agent→API→Web 순차 배포, throttle/alarms/budget |
+| Part 6 | 멀티턴 대화 세션 | 완료 — 세션별 Agent 재사용으로 대화 기억, 새 대화 초기화, 레거시 폼 제거 |
 
 ### Part 5 — 비공개 호스팅 · 풀스택 CodePipeline · API 보호
 
@@ -255,6 +274,7 @@ flowchart LR
 - Budget은 알림만 보내며 지출을 자동 차단하지 않습니다.
 - Agent 성공 후 API/Web이 실패하면 선행 배포는 자동 롤백되지 않습니다.
 - 인증 없는 공개 API이므로 프로덕션 전환 시 인증/WAF rate limit 추가 필요.
+- 멀티턴 대화 기억은 Part 6에서 추가했습니다(세션별 Agent 재사용). 지속 저장은 AgentCore Memory 등 별도 구성이 필요합니다.
 
 
 ## CI/CD 파이프라인
@@ -408,6 +428,7 @@ uv run python ops/07_observability_check.py --window-min 30
 | 7 | `feature/devsecops-hardening` | 보안 평가 게이트, 공급망 검사, 위협 모델, 관찰성 IaC |
 
 | 8 | `feature/dining-web-hosting-pipeline` | Part 5: 비공개 S3+CloudFront OAC 호스팅, GitHub 풀스택 파이프라인, API 보호 IaC |
+| 9 | `feature/multiturn-session` · `fix/multiturn-memory` | Part 6: 멀티턴 세션 배관과 세션별 Agent 재사용 기억, 레거시 폼 제거 |
 
 각 브랜치는 `main`에서 생성하고, 검토와 검증을 마친 뒤 PR을 squash merge하고 삭제합니다. 콘솔 확인만 필요한 Part 3은 별도 코드 브랜치로 나누지 않고 Part 2 PR의 검증 결과에 기록합니다.
 
