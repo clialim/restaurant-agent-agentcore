@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import UTC, datetime
 
@@ -25,7 +26,8 @@ from strands.models import BedrockModel
 from tools import WORKSPACE, read_file, run_shell, write_file
 
 REGION = "us-west-2"
-MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 TOOL_LOG = WORKSPACE / ".tool-log.jsonl"
 
 SYSTEM_PROMPT = """당신은 RestaurantAgent 프로젝트(강남 식당 추천 AI 에이전트)의 개발을 돕는 코딩 에이전트입니다.

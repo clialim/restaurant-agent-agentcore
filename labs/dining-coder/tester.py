@@ -8,12 +8,15 @@ Tester에게는 write_file과 run_shell만 부여합니다(권한 분리). 결�
 
 from __future__ import annotations
 
+import os
+
 from strands import Agent, tool
 from strands.models import BedrockModel
 from tools import run_shell, write_file
 
 REGION = "us-west-2"
-MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 
 TESTER_PROMPT = """당신은 RestaurantAgent 프로젝트의 테스트 엔지니어입니다.
 

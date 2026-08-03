@@ -9,12 +9,15 @@
 
 from __future__ import annotations
 
+import os
+
 from strands import Agent, tool
 from strands.models import BedrockModel
 from tools import read_file
 
 REGION = "us-west-2"
-MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 
 SECURITY_REVIEWER_PROMPT = """당신은 RestaurantAgent 프로젝트의 보안 리뷰어입니다. read_file로 대상 파일을 읽고 다음 기준으로 검토합니다.
 
