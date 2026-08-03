@@ -19,6 +19,7 @@ import logging
 
 from coder import build_agent
 from reviewer import review_code
+from security_reviewer import security_review_code
 from tester import run_tests
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,14 @@ def build_with_review(task: str, target: str = "reservation.py") -> dict:
 
         review = str(review_code(target)).strip()
         approved = review.startswith("APPROVED")
-        logger.info("round=%s approved=%s", round_no, approved)
+        logger.info("round=%s quality_approved=%s", round_no, approved)
+
+        sec_review = str(security_review_code(target)).strip()
+        sec_approved = sec_review.startswith("APPROVED")
+        logger.info("round=%s security_approved=%s", round_no, sec_approved)
+
+        # 합의 규칙: 품질·보안 리뷰어 모두 APPROVED여야 통과합니다.
+        both_approved = approved and sec_approved
 
         test_output = str(run_tests(target)).strip()
         passed, last_line = _passed(test_output)
@@ -73,15 +81,16 @@ def build_with_review(task: str, target: str = "reservation.py") -> dict:
         history.append(
             {
                 "round": round_no,
-                "approved": approved,
+                "approved": both_approved,
+                "quality_review": review,
+                "security_review": sec_review,
                 "passed": passed,
-                "review": review,
                 "test": last_line,
             }
         )
 
-        # 두 판정 모두 통과해야 완료 — 어느 하나라도 미통과면 재작업합니다.
-        if approved and passed:
+        # 품질·보안·테스트 세 판정 모두 통과해야 완료입니다.
+        if both_approved and passed:
             return {
                 "state": "APPROVED",
                 "rounds": round_no,
@@ -90,7 +99,11 @@ def build_with_review(task: str, target: str = "reservation.py") -> dict:
             }
 
         # 미통과 — 근거를 요약 없이 원문으로 다음 회차 Coder에게 전달합니다.
-        feedback = f"[리뷰 판정]\n{review}\n\n[테스트 결과]\n{test_output}"
+        feedback_parts = [f"[품질 리뷰 판정]\n{review}"]
+        if not sec_approved:
+            feedback_parts.append(f"[보안 리뷰 판정]\n{sec_review}")
+        feedback_parts.append(f"[테스트 결과]\n{test_output}")
+        feedback = "\n\n".join(feedback_parts)
 
     # MAX_ROUNDS 초과 — 무한 루프 없이 최선 결과를 반환합니다.
     return {

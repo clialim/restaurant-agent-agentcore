@@ -42,11 +42,17 @@ if prompt := st.chat_input("코딩 요청을 입력하세요"):
             status = "통과" if entry["approved"] and entry["passed"] else "재작업"
             st.write(
                 f"[{status}] 라운드 {entry['round']} — "
-                f"Reviewer: {verdict} · Tester: {entry['test']}"
+                f"품질: {verdict} · 보안: "
+                f"{'APPROVED' if entry.get('security_review', '').startswith('APPROVED') else 'NEEDS_CHANGES'}"
+                f" · Tester: {entry['test']}"
             )
             if not entry["approved"]:
-                with st.expander(f"라운드 {entry['round']} 리뷰 지적"):
-                    st.text(entry["review"])
+                with st.expander(f"라운드 {entry['round']} 품질 리뷰 지적"):
+                    st.text(entry.get("quality_review", ""))
+                sec = entry.get("security_review", "")
+                if sec and not sec.startswith("APPROVED"):
+                    with st.expander(f"라운드 {entry['round']} 보안 리뷰 지적"):
+                        st.text(sec)
 
         st.subheader("최종 코드")
         target_file = WORKSPACE / TARGET
