@@ -29,16 +29,21 @@ SECURITY_REVIEWER_PROMPT = """당신은 RestaurantAgent 프로젝트의 보안 �
 4. 정보 노출 — 시스템 내부 구현, 절대 경로, 자격증명이 오류 메시지에 노출되지 않는가.
 5. 부작용 안전 — 상태를 변경하는 함수가 사전 확인 없이 실행되지 않는가(예약 생성 전 확인).
 
-반드시 응답의 첫 줄을 APPROVED 또는 NEEDS_CHANGES로 시작하세요.
-NEEDS_CHANGES면 고칠 항목을 번호로 나열하고, 각 항목에 위협 시나리오를 한 줄씩 붙이세요.
+대상 코드에 경로 접근·셸 실행·부작용이 없다면 해당 항목은 N/A로 처리하고 불필요한 통제를 요구하지 마세요.
+입력이 명시적으로 검증되는 순수 함수에는 포괄적인 예외 처리를 추가하라고 요구하지 마세요.
+실제 악용 가능한 취약점이 있을 때만 NEEDS_CHANGES로 판정하고, 선택적 모범 사례 권고는 통과를 막지 마세요.
+반드시 응답의 첫 줄에 태그 없이 APPROVED 또는 NEEDS_CHANGES만 출력하세요.
+NEEDS_CHANGES면 그 다음 줄부터 고칠 항목과 위협 시나리오를 번호로 나열하세요.
 """
 
-security_reviewer = Agent(
-    model=BedrockModel(model_id=MODEL_ID, region_name=REGION),
-    system_prompt=SECURITY_REVIEWER_PROMPT,
-    tools=[read_file],
-    callback_handler=None,
-)
+def _build_security_reviewer() -> Agent:
+    """현재 코드 스냅샷만 독립 검토하는 보안 Reviewer를 생성합니다."""
+    return Agent(
+        model=BedrockModel(model_id=MODEL_ID, region_name=REGION, temperature=0.0),
+        system_prompt=SECURITY_REVIEWER_PROMPT,
+        tools=[read_file],
+        callback_handler=None,
+    )
 
 
 @tool
@@ -48,4 +53,4 @@ def security_review_code(path: str) -> str:
     Args:
         path: workspace 기준 검토 대상 파일 경로.
     """
-    return str(security_reviewer(f"{path} 파일의 보안을 검토해 주세요."))
+    return str(_build_security_reviewer()(f"{path} 파일의 보안을 검토해 주세요."))

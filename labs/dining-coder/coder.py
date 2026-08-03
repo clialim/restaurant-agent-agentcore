@@ -85,7 +85,7 @@ def _use_utf8_stdout() -> None:
 def build_agent() -> Agent:
     """RestaurantAgent 개발용 코딩 에이전트를 생성합니다."""
     return Agent(
-        model=BedrockModel(model_id=MODEL_ID, region_name=REGION),
+        model=BedrockModel(model_id=MODEL_ID, region_name=REGION, temperature=0.0),
         system_prompt=SYSTEM_PROMPT,
         tools=[run_shell, read_file, write_file],
         hooks=[ToolAuditHook()],

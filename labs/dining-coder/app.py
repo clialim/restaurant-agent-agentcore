@@ -38,21 +38,22 @@ if prompt := st.chat_input("코딩 요청을 입력하세요"):
                     st.text(result["remaining"])
 
         for entry in result["history"]:
-            verdict = "APPROVED" if entry["approved"] else "NEEDS_CHANGES"
+            quality_approved = entry.get("quality_approved", entry["approved"])
+            security_approved = entry.get("security_approved", entry["approved"])
+            quality_verdict = "APPROVED" if quality_approved else "NEEDS_CHANGES"
+            security_verdict = "APPROVED" if security_approved else "NEEDS_CHANGES"
             status = "통과" if entry["approved"] and entry["passed"] else "재작업"
             st.write(
                 f"[{status}] 라운드 {entry['round']} — "
-                f"품질: {verdict} · 보안: "
-                f"{'APPROVED' if entry.get('security_review', '').startswith('APPROVED') else 'NEEDS_CHANGES'}"
+                f"품질: {quality_verdict} · 보안: {security_verdict}"
                 f" · Tester: {entry['test']}"
             )
-            if not entry["approved"]:
+            if not quality_approved:
                 with st.expander(f"라운드 {entry['round']} 품질 리뷰 지적"):
                     st.text(entry.get("quality_review", ""))
-                sec = entry.get("security_review", "")
-                if sec and not sec.startswith("APPROVED"):
-                    with st.expander(f"라운드 {entry['round']} 보안 리뷰 지적"):
-                        st.text(sec)
+            if not security_approved:
+                with st.expander(f"라운드 {entry['round']} 보안 리뷰 지적"):
+                    st.text(entry.get("security_review", ""))
 
         st.subheader("최종 코드")
         target_file = WORKSPACE / TARGET
