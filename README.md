@@ -49,7 +49,10 @@ flowchart TB
 RestaurantAgent/
 ├── agentcore/              # AgentCore CLI 설정(agentcore.json, aws-targets.json, .env.local)
 ├── app/
-│   └── RestaurantAgent/    # 에이전트 애플리케이션 코드(main.py)
+│   ├── RestaurantAgent/    # 식당 추천·예약 에이전트 코드
+│   └── CodingService/      # 세션 격리 코딩 Runtime(Container, 전용 uv.lock)
+├── labs/
+│   └── coding-service/     # Runtime command 클라이언트·PR 오케스트레이터·팀 콘솔
 ├── ops/                    # 버전·엔드포인트 운영 및 관찰성 점검 스크립트
 ├── scripts/
 │   └── build_source_bundle.py  # CI/CD 소스 번들(ZIP) 생성
@@ -92,6 +95,43 @@ uv sync --frozen
 ```
 
 `.env.example`을 참고해 로컬 `.env`를 구성합니다. `.env`와 `agentcore/.env.local`은 Git에 커밋하지 않습니다.
+
+## CodingService Runtime 서비스화
+
+[`app/CodingService/`](app/CodingService/)는 기존 RestaurantAgent와 독립된 두 번째 AgentCore Runtime입니다. Container 빌드로 `git`·pytest·Ruff를 제공하고, 관리형 session storage의 `/mnt/workspace`에 세션별 작업 파일과 대화 이력을 보존합니다. [`labs/coding-service/runtime_client.py`](labs/coding-service/runtime_client.py)는 같은 `runtimeSessionId`로 Agent 호출과 `InvokeAgentRuntimeCommand`를 연결해 결정적인 테스트·Git 명령을 실행합니다.
+
+```mermaid
+flowchart LR
+    User[팀 콘솔·로컬 오케스트레이터] -->|InvokeAgentRuntime| Runtime[CodingService Container]
+    User -->|InvokeAgentRuntimeCommand| Runtime
+    Runtime --> Session[(Session storage<br/>/mnt/workspace)]
+    Runtime -->|JSONL 작업 메타데이터| Files[(S3 Files<br/>/mnt/persistent)]
+    User -->|명시적 --publish| GitHub[GitHub branch·PR]
+```
+
+기본 구성은 VPC 비용 없이 session storage만 사용합니다. S3 Files 공유 로그를 연결할 때는 [`infra/coding-service/template.yaml`](infra/coding-service/template.yaml)로 서로 다른 AZ의 private subnet 두 개에 mount target을 만들고, 배포 출력은 `configure_storage.py`가 `agentcore/agentcore.json`의 VPC·filesystem 설정으로 변환합니다.
+
+```powershell
+# lockfile과 Container 검증
+uv lock --project app/CodingService
+uv sync --project app/CodingService --frozen
+
+docker build --tag restaurant-agent/coding-service:local app/CodingService
+agentcore validate
+
+# S3 Files 스택 배포 후 선언형 Runtime 설정에 출력 반영
+aws cloudformation deploy --template-file infra/coding-service/template.yaml --stack-name coding-service-storage --capabilities CAPABILITY_IAM --parameter-overrides VpcId=<vpc-id> PrivateSubnetAId=<private-subnet-a> PrivateSubnetBId=<private-subnet-b>
+uv run python labs/coding-service/configure_storage.py --stack-name coding-service-storage --region us-west-2
+agentcore validate
+
+# Runtime 배포 후 동일 세션 Agent→pytest 스모크 테스트와 팀 콘솔
+uv run python labs/coding-service/test_invoke.py --runtime-arn <runtime-arn>
+uv run --with streamlit==1.60.0 streamlit run labs/coding-service/console_app.py
+```
+
+> `InvokeAgentRuntimeCommand`는 설계상 컨테이너 안에서 코드를 실행하는 원격 실행 권한입니다. Runtime ARN 호출 IAM 권한은 신뢰된 운영 주체로 제한하고, GitHub 토큰은 Runtime에 주입하지 않습니다. `issue_to_pr.py --publish`만 로컬 `git`/`gh` 자격증명을 사용합니다. 이 흐름은 소유자가 검토한 신뢰 저장소에만 사용해야 하며 fork·외부 PR처럼 신뢰할 수 없는 코드는 실행하지 않습니다. pytest child process에는 Runtime 자격증명 환경 변수를 전달하지 않고 EC2 metadata 조회도 비활성화합니다. 새 파일은 intent-to-add로 patch에 포함하고 검증한 base commit이 바뀌면 게시를 중단하며, workflow·GitHub Action·CODEOWNERS·Dockerfile·buildspec 같은 CI/공급망 경로는 자동 게시를 거부합니다. Runtime의 pytest도 생성된 Python 코드를 실행하므로 VPC HTTPS egress와 데이터 민감도를 별도로 통제해야 합니다.
+>
+> S3 Files 로그는 기본적으로 prompt/result 원문 대신 길이·SHA-256·상태만 저장합니다. `WORK_LOG_INCLUDE_PREVIEWS=true`는 마스킹된 미리보기가 꼭 필요한 통제된 환경에서만 사용합니다. 로그 기록 실패 시 요청까지 실패시켜야 하는 환경은 `WORK_LOG_REQUIRED=true`를 설정합니다. 버킷 버전 관리는 복구 수단이며 WORM 감사 저장소를 의미하지 않습니다. S3 Files·NAT·AgentCore Runtime에는 사용 비용이 발생하므로 실제 스택과 Runtime 배포 전에 대상 계정의 비용·IAM 정책을 확인합니다.
 
 ## SAM 서버리스 웹 앱
 
