@@ -12,6 +12,8 @@ SYSTEM_PROMPT와 도구를 모듈 상수/함수로 노출해 tests/eval_gate.py�
 - 사용자 입력 원문을 로그로 흘리지 않아 개인정보 노출을 줄입니다.
 """
 
+import os
+import re
 from datetime import date, datetime
 
 from bedrock_agentcore import BedrockAgentCoreApp
@@ -19,10 +21,13 @@ from strands import Agent, tool
 from strands.models import BedrockModel
 
 REGION = "us-west-2"
+DEFAULT_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 
 # 입력 검증 한도 — 과대 페이로드로 인한 비용/지연/남용을 방지합니다.
 MAX_PROMPT_CHARS = 4000
 MIN_PROMPT_CHARS = 1
+THINKING_PATTERN = re.compile(r"<thinking>.*?</thinking>\s*", re.DOTALL)
 
 # ---------------------------------------------------------------------------
 # 데이터
@@ -260,7 +265,7 @@ _SESSION_AGENTS: dict[str, Agent] = {}
 def _build_agent() -> Agent:
     """배포·평가와 동일한 구성의 Agent를 생성합니다."""
     return Agent(
-        model=BedrockModel(model_id="us.anthropic.claude-sonnet-4-6", region_name=REGION),
+        model=BedrockModel(model_id=MODEL_ID, region_name=REGION),
         system_prompt=SYSTEM_PROMPT,
         tools=[search_restaurants, get_restaurant_reviews, check_reservations, create_reservation],
         # 스트리밍 중간 결과를 콘솔로 출력하지 않음.
@@ -317,10 +322,16 @@ async def invoke(payload):
     session_id = payload.get("sessionId") if isinstance(payload, dict) else None
     agent = _get_agent(session_id if isinstance(session_id, str) else None)
 
+    # 일부 모델은 내부 추론을 <thinking> 태그로 스트리밍합니다. 전체 응답을 조립한 뒤
+    # 사용자에게는 최종 답변만 반환해 내부 추론·도구 선택 근거가 노출되지 않게 합니다.
+    chunks: list[str] = []
     stream = agent.stream_async(prompt)
     async for event in stream:
         if "data" in event and isinstance(event["data"], str):
-            yield event["data"]
+            chunks.append(event["data"])
+    answer = THINKING_PATTERN.sub("", "".join(chunks)).strip()
+    if answer:
+        yield answer
 
 
 if __name__ == "__main__":
