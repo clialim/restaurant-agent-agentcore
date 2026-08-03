@@ -3,8 +3,8 @@
 코딩 요청을 입력하면 코디네이터가 작성→검토→테스트 루프를 최대 3회 돌리고,
 라운드별 판정(Reviewer/Tester)과 최종 코드를 화면에 보여줍니다.
 
-실행 (streamlit을 프로젝트 락에 추가하지 않고 임시로 설치해 실행):
-    uv run --with streamlit streamlit run app.py
+실행 (streamlit을 프로젝트 락에 추가하지 않고 검증된 버전으로 임시 실행):
+    uv run --with streamlit==1.60.0 streamlit run app.py
 
 이 명령은 장시간 실행되는 서버이므로 터미널에서 직접 실행하세요.
 """
@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import streamlit as st
-from orchestrator import build_with_review
+from orchestrator import DEMO_DRAFT, build_with_review
 from tools import WORKSPACE
 
 TARGET = "reservation.py"
@@ -20,14 +20,23 @@ TARGET = "reservation.py"
 st.set_page_config(page_title="dining-coder 리뷰 루프")
 st.title("dining-coder — 리뷰·테스트 자기 교정 루프")
 st.caption("요청을 입력하면 Coder·Reviewer·Tester가 최대 3회 루프로 코드를 다듬습니다.")
+demo_mode = st.toggle(
+    "재작업 데모 초안 사용",
+    value=True,
+    help="첫 라운드에 결함 있는 기존 초안을 검토한 뒤 Coder가 피드백으로 수정합니다.",
+)
 
-if prompt := st.chat_input("코딩 요청을 입력하세요"):
+if prompt := st.chat_input("예: 예약 인원이 수용 인원을 넘는지 안전하게 판정하는 도구를 완성해 주세요"):
     with st.chat_message("user"):
         st.write(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("에이전트 루프 실행 중..."):
-            result = build_with_review(prompt, target=TARGET)
+            result = build_with_review(
+                prompt,
+                target=TARGET,
+                initial_draft=DEMO_DRAFT if demo_mode else None,
+            )
 
         if result["state"] == "APPROVED":
             st.success(f"통과 (라운드 {result['rounds']})")
