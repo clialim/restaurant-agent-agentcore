@@ -15,32 +15,6 @@
       "build": "CodeZip",
       "runtimeVersion": "PYTHON_3_13",
       "networkMode": "PUBLIC"
-    },
-    {
-      "name": "CodingService",
-      "codeLocation": "app/CodingService",
-      "entrypoint": "main.py",
-      "build": "Container",
-      "dockerfile": "Dockerfile",
-      "protocol": "HTTP",
-      "networkMode": "PUBLIC",
-      "envVars": [
-        {
-          "name": "BEDROCK_MODEL_ID",
-          "value": "us.amazon.nova-lite-v1:0"
-        },
-        {
-          "name": "WORKSPACE_ROOT",
-          "value": "/mnt/workspace"
-        }
-      ],
-      "filesystemConfigurations": [
-        {
-          "sessionStorage": {
-            "mountPath": "/mnt/workspace"
-          }
-        }
-      ]
     }
   ],
   "memories": [],

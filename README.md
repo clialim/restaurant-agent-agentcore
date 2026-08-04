@@ -98,7 +98,9 @@ uv sync --frozen
 
 ## CodingService Runtime 서비스화
 
-[`app/CodingService/`](app/CodingService/)는 기존 RestaurantAgent와 독립된 두 번째 AgentCore Runtime입니다. Container 빌드로 `git`·pytest·Ruff를 제공하고, 관리형 session storage의 `/mnt/workspace`에 세션별 작업 파일과 대화 이력을 보존합니다. [`labs/coding-service/runtime_client.py`](labs/coding-service/runtime_client.py)는 같은 `runtimeSessionId`로 Agent 호출과 `InvokeAgentRuntimeCommand`를 연결해 결정적인 테스트·Git 명령을 실행합니다.
+[`app/CodingService/`](app/CodingService/)는 기존 RestaurantAgent 스택을 변경하지 않는 별도 AgentCore 프로젝트([`services/CodingService/`](services/CodingService/))로 배포됩니다. Container 빌드로 `git`·pytest·Ruff를 제공하고, 관리형 session storage의 `/mnt/workspace`에 세션별 작업 파일과 대화 이력을 보존합니다. [`labs/coding-service/runtime_client.py`](labs/coding-service/runtime_client.py)는 같은 `runtimeSessionId`로 Agent 호출과 `InvokeAgentRuntimeCommand`를 연결해 결정적인 테스트·Git 명령을 실행합니다.
+
+CodingService의 선언형 source of truth는 `services/CodingService/agentcore/agentcore.json`이며, AgentCore CLI 명령은 `services/CodingService`를 작업 디렉터리로 실행합니다. 루트 `agentcore/agentcore.json`은 RestaurantAgent 전용이므로 CodingService 배포에 사용하지 않습니다.
 
 ```mermaid
 flowchart LR
@@ -109,22 +111,34 @@ flowchart LR
     User -->|명시적 --publish| GitHub[GitHub branch·PR]
 ```
 
-기본 구성은 VPC 비용 없이 session storage만 사용합니다. S3 Files 공유 로그를 연결할 때는 [`infra/coding-service/template.yaml`](infra/coding-service/template.yaml)로 서로 다른 AZ의 private subnet 두 개에 mount target을 만들고, 배포 출력은 `configure_storage.py`가 `agentcore/agentcore.json`의 VPC·filesystem 설정으로 변환합니다.
+기본 구성은 VPC 비용 없이 session storage만 사용합니다. S3 Files 공유 로그를 연결할 때는 [`infra/coding-service/template.yaml`](infra/coding-service/template.yaml)로 서로 다른 AZ의 private subnet 두 개에 mount target을 만들고, 배포 출력은 `configure_storage.py`가 독립 프로젝트의 `services/CodingService/agentcore/agentcore.json` VPC·filesystem 설정으로 변환합니다.
+
+저장소 루트에서 Container와 Python 환경을 검증합니다.
 
 ```powershell
-# lockfile과 Container 검증
 uv lock --project app/CodingService
 uv sync --project app/CodingService --frozen
+docker build --platform linux/arm64 --tag restaurant-agent/coding-service:local app/CodingService
+```
 
-docker build --tag restaurant-agent/coding-service:local app/CodingService
-agentcore validate
+`services/CodingService`를 작업 디렉터리로 설정한 터미널에서 독립 AgentCore 프로젝트를 검증·배포합니다.
 
-# S3 Files 스택 배포 후 선언형 Runtime 설정에 출력 반영
-aws cloudformation deploy --template-file infra/coding-service/template.yaml --stack-name coding-service-storage --capabilities CAPABILITY_IAM --parameter-overrides VpcId=<vpc-id> PrivateSubnetAId=<private-subnet-a> PrivateSubnetBId=<private-subnet-b>
-uv run python labs/coding-service/configure_storage.py --stack-name coding-service-storage --region us-west-2
-agentcore validate
+```powershell
+agentcore validate --json
+agentcore deploy --dry-run --json
+agentcore deploy --diff --json
+```
 
-# Runtime 배포 후 동일 세션 Agent→pytest 스모크 테스트와 팀 콘솔
+S3 Files 스택은 저장소 루트에서 배포하고, 출력은 독립 설정 파일에 명시적으로 반영합니다.
+
+```powershell
+aws cloudformation deploy --template-file infra/coding-service/template.yaml --stack-name coding-service-storage --capabilities CAPABILITY_IAM --parameter-overrides VpcId=<vpc-id> PrivateSubnetAId=<private-subnet-a> PrivateSubnetBId=<private-subnet-b> --region us-west-2
+uv run python labs/coding-service/configure_storage.py --stack-name coding-service-storage --region us-west-2 --config services/CodingService/agentcore/agentcore.json
+```
+
+설정 반영 후 다시 `services/CodingService`에서 `agentcore validate --json`과 `agentcore deploy --yes --json`을 실행합니다. Runtime 배포 후 저장소 루트에서 동일 세션 Agent→pytest 스모크 테스트와 팀 콘솔을 실행합니다.
+
+```powershell
 uv run python labs/coding-service/test_invoke.py --runtime-arn <runtime-arn>
 uv run --with streamlit==1.60.0 streamlit run labs/coding-service/console_app.py
 ```
