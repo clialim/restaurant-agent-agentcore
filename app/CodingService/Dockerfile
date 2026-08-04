@@ -5,7 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HOME="/home/app" \
     PATH="/app/.venv/bin:${PATH}"
 
-RUN apt-get update \
+RUN cp "$(python -c 'from pip._vendor import certifi; print(certifi.where())')" /etc/ssl/certs/ca-certificates.crt \
+    && sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates git \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir uv==0.10.6 \

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import uuid
 from collections.abc import Callable
@@ -93,8 +94,9 @@ class CodingRuntimeClient:
     ) -> CommandResult:
         """활성 세션에서 단일 명령을 실행하고 이벤트 스트림을 수집합니다."""
         self._validate_session_id(session_id)
-        if not 1 <= len(command.encode("utf-8")) <= MAX_COMMAND_BYTES:
-            raise ValueError("command는 1바이트 이상 64KB 이하여야 합니다.")
+        shell_command = f"/bin/bash -c {shlex.quote(command)}"
+        if not 1 <= len(shell_command.encode("utf-8")) <= MAX_COMMAND_BYTES:
+            raise ValueError("shell command는 1바이트 이상 64KB 이하여야 합니다.")
         if not 1 <= timeout <= 3600:
             raise ValueError("timeout은 1~3600초여야 합니다.")
 
@@ -104,7 +106,7 @@ class CodingRuntimeClient:
             runtimeSessionId=session_id,
             contentType="application/json",
             accept="application/vnd.amazon.eventstream",
-            body={"command": command, "timeout": timeout},
+            body={"command": shell_command, "timeout": timeout},
         )
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
