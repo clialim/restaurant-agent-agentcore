@@ -20,6 +20,7 @@ from strands_evals import Case, Experiment
 from strands_evals.evaluators import OutputEvaluator
 
 from app.RestaurantAgent.main import (
+    MODEL_ID,
     SYSTEM_PROMPT,
     check_reservations,
     create_reservation,
@@ -35,7 +36,7 @@ QUALITY_THRESHOLD = 0.7  # 품질 평균 게이트 — 미달 시 배포 차단
 def get_response(case: Case) -> str:
     """배포될 코드와 같은 프롬프트·도구 구성으로 에이전트를 호출합니다."""
     agent = Agent(
-        model=BedrockModel(model_id="us.anthropic.claude-sonnet-4-6", region_name=REGION),
+        model=BedrockModel(model_id=MODEL_ID, region_name=REGION),
         system_prompt=SYSTEM_PROMPT,
         tools=[search_restaurants, get_restaurant_reviews, check_reservations, create_reservation],
         callback_handler=None,
