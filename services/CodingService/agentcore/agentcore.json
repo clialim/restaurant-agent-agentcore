@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "CodingService",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "CodingService"
+  },
+  "runtimes": [
+    {
+      "name": "CodingService",
+      "build": "Container",
+      "entrypoint": "main.py",
+      "codeLocation": "../../app/CodingService",
+      "dockerfile": "Dockerfile",
+      "envVars": [
+        {
+          "name": "BEDROCK_MODEL_ID",
+          "value": "us.amazon.nova-lite-v1:0"
+        },
+        {
+          "name": "WORKSPACE_ROOT",
+          "value": "/mnt/workspace"
+        },
+        {
+          "name": "PERSISTENT_ROOT",
+          "value": "/mnt/persistent"
+        }
+      ],
+      "networkMode": "VPC",
+      "networkConfig": {
+        "subnets": [
+          "subnet-02a847e14783e7c99",
+          "subnet-040b7e8d44eb43064"
+        ],
+        "securityGroups": [
+          "sg-0cb4eb22711f25191"
+        ],
+        "vpcId": "vpc-0c6171ec2fb8034ff"
+      },
+      "protocol": "HTTP",
+      "filesystemConfigurations": [
+        {
+          "sessionStorage": {
+            "mountPath": "/mnt/workspace"
+          }
+        },
+        {
+          "s3FilesAccessPoint": {
+            "accessPointArn": "arn:aws:s3files:us-west-2:953884765354:file-system/fs-0f77dac61019fba89/access-point/fsap-02dd7551c4428b4dd",
+            "mountPath": "/mnt/persistent"
+          }
+        }
+      ]
+    }
+  ],
+  "memories": [],
+  "knowledgeBases": [],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": [],
+  "configBundles": [],
+  "abTests": [],
+  "harnesses": [],
+  "datasets": [],
+  "payments": []
+}

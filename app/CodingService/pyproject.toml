@@ -1,0 +1,15 @@
+[project]
+name = "coding-service"
+version = "0.1.0"
+description = "AgentCore Runtime에 배포하는 세션 격리형 팀 코딩 서비스"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "bedrock-agentcore==1.19.0",
+    "pytest==9.0.3",
+    "ruff==0.16.0",
+    "strands-agents==1.50.2",
+    "uvicorn==0.52.0",
+]
+
+[tool.uv]
+package = false

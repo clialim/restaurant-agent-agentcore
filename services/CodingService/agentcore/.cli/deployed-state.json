@@ -1,0 +1,17 @@
+{
+  "targets": {
+    "default": {
+      "resources": {
+        "runtimes": {
+          "CodingService": {
+            "runtimeId": "CodingService_CodingService-Z8d6EVGKsm",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:953884765354:runtime/CodingService_CodingService-Z8d6EVGKsm",
+            "roleArn": "arn:aws:iam::953884765354:role/AgentCore-CodingService-d-ApplicationAgentCodingSer-6xQVRbDMnbiw"
+          }
+        },
+        "stackName": "AgentCore-CodingService-default",
+        "deployHash": "8fd622c4f254dd49"
+      }
+    }
+  }
+}
