@@ -326,6 +326,36 @@ def _final_answer(result: object) -> str:
     return THINKING_PATTERN.sub("", str(result)).strip()
 
 
+def _log_request_exception(
+    *,
+    event: str,
+    session_id: str,
+    request_id: str,
+    error: Exception,
+) -> None:
+    """요청 원문 없이 상관관계 식별자와 traceback을 단일 JSON 이벤트로 기록합니다."""
+    exception_type = type(error).__name__
+    traceback_text = logging.Formatter().formatException(
+        (type(error), error, error.__traceback__)
+    )
+    record = {
+        "event": event,
+        "sessionId": session_id,
+        "requestId": request_id,
+        "exceptionType": exception_type,
+        "traceback": _redact(traceback_text),
+    }
+    logger.error(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
+        extra={
+            "event_name": event,
+            "session_id": session_id,
+            "request_id": request_id,
+            "exception_type": exception_type,
+        },
+    )
+
+
 app = BedrockAgentCoreApp()
 
 
@@ -340,7 +370,13 @@ def invoke(payload: object, context: RequestContext) -> dict[str, str]:
     try:
         result = _final_answer(_build_agent(session_id)(prompt))
         status = "COMPLETED"
-    except Exception:  # noqa: BLE001 - 내부 예외 상세와 자격증명을 응답에 노출하지 않습니다.
+    except Exception as exc:  # noqa: BLE001 - 상세는 서버 로그에만 기록합니다.
+        _log_request_exception(
+            event="coding_request_failed",
+            session_id=session_id,
+            request_id=request_id,
+            error=exc,
+        )
         result = "코딩 요청 처리 중 내부 오류가 발생했습니다."
         status = "FAILED"
 
@@ -352,10 +388,12 @@ def invoke(payload: object, context: RequestContext) -> dict[str, str]:
             status=status,
             result=result,
         )
-    except OSError:
-        logger.exception(
-            "CodingService 작업 로그 기록 실패",
-            extra={"session_id": session_id, "request_id": request_id},
+    except OSError as exc:
+        _log_request_exception(
+            event="work_log_write_failed",
+            session_id=session_id,
+            request_id=request_id,
+            error=exc,
         )
         if WORK_LOG_REQUIRED:
             status = "FAILED"
