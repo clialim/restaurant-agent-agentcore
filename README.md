@@ -15,6 +15,7 @@ Strands Agents SDK로 구현한 AI 에이전트를 Amazon Bedrock AgentCore Runt
 | DevSecOps | CI에 SAST(Bandit)·의존성 CVE(pip-audit)·시크릿(detect-secrets)·lockfile 고정을 fail-fast 게이트로 통합 |
 | AI Security | 프롬프트 주입/역할 탈취/도구 노출/간접 주입/범위 이탈 평가를 fail-closed로 차단, 입력 검증·예약 안전 통제, 위협 모델 문서화 |
 | Cloud Engineer | 버전·엔드포인트 카나리 배포·롤백, CloudWatch 알람·대시보드 IaC(CloudFormation), 재현 가능한 배포 번들, S3+CloudFront OAC 정적 호스팅, GitHub→CodePipeline 풀스택 CI/CD |
+| AI Agent Design | 멀티에이전트 오케스트레이션(Coder·Reviewer·Tester 자기 교정 루프), 권한 분리, 판정 형식 고정, workspace 샌드박스 실행, 도구 감사 로그 |
 
 기술 스택: Python 3.13 · uv · Strands Agents · Amazon Bedrock(Claude) · AgentCore Runtime · CodeBuild/CodePipeline · CloudFormation · CloudWatch · S3 · CloudFront OAC · SAM · Vite/React/Cloudscape
 
@@ -209,6 +210,7 @@ flowchart LR
 | Part 4 | CORS와 통합 | 완료 — `DiningHttpApi.CorsConfiguration`으로 로컬 오리진 허용 |
 | Part 5 | 정적 호스팅 · 풀스택 파이프라인 · API 보호 | 완료 — 비공개 S3 + CloudFront OAC, GitHub→Test→Agent→API→Web 순차 배포, throttle/alarms/budget |
 | Part 6 | 멀티턴 대화 세션 | 완료 — 세션별 Agent 재사용으로 대화 기억, 새 대화 초기화, 레거시 폼 제거 |
+| Part 7 | 코딩 에이전트와 자기 교정 루프 | 완료 — workspace 샌드박스 코딩 에이전트 + Coder·Reviewer·Tester 3인 루프, 2인 리뷰어 합의 규칙 |
 
 ### Part 5 — 비공개 호스팅 · 풀스택 CodePipeline · API 보호
 
@@ -275,6 +277,45 @@ flowchart LR
 - Agent 성공 후 API/Web이 실패하면 선행 배포는 자동 롤백되지 않습니다.
 - 인증 없는 공개 API이므로 프로덕션 전환 시 인증/WAF rate limit 추가 필요.
 - 멀티턴 대화 기억은 Part 6에서 추가했습니다(세션별 Agent 재사용). 지속 저장은 AgentCore Memory 등 별도 구성이 필요합니다.
+
+
+### Part 7 — 코딩 에이전트와 리뷰·테스트 자기 교정 루프
+
+RestaurantAgent의 개발을 돕는 코딩 에이전트(`labs/dining-coder/`)를 Strands SDK로 구현합니다. 단순 코드 생성에서 끝나지 않고, Coder·Reviewer·Tester 3인 역할 분리 구조의 자기 교정 루프로 "AI가 왜 틀릴 수 있는지 이해하고 구조적으로 대응하는" 패턴을 시연합니다.
+
+```mermaid
+flowchart LR
+    Task[코딩 요청] --> Coder[Coder<br/>write_file · run_shell]
+    Coder --> QR[품질 Reviewer<br/>read_file만]
+    Coder --> SR[보안 Reviewer<br/>read_file만]
+    QR --> Check{합의?}
+    SR --> Check
+    Check -->|둘 다 APPROVED| Tester[Tester<br/>write_file · run_shell]
+    Check -->|하나라도 NEEDS_CHANGES| Feedback[피드백 원문 → Coder]
+    Tester --> Pass{passed?}
+    Pass -->|failed=0| Done[완료]
+    Pass -->|failed>0| Feedback
+    Feedback --> Coder
+```
+
+핵심 설계 원칙:
+
+| 원칙 | 적용 |
+|------|------|
+| 루프 카운터는 코드에 | `range(1, MAX_ROUNDS+1)` — 3회 상한, 재현 가능 |
+| 판정 형식 고정 | 첫 줄 APPROVED/NEEDS_CHANGES, 마지막 줄 passed=N failed=M |
+| 권한 분리 | Coder(쓰기), Reviewer(읽기만), Tester(쓰기+실행) |
+| 합의 규칙 | 품질·보안 2인 Reviewer 모두 APPROVED여야 통과 |
+| 근거는 원문 전달 | 요약하면 Coder가 같은 실수 반복 |
+| 거부는 반환값 | 예외가 아니라 문자열 → 에이전트가 자력으로 재시도 |
+
+실행:
+```bash
+cd labs/dining-coder
+uv run python tools.py                          # 경계·거부 테스트 (Bedrock 불필요)
+uv run python orchestrator.py                   # 루프 실행 (Bedrock 필요)
+uv run --with streamlit streamlit run app.py    # 브라우저 콘솔
+```
 
 
 ## CI/CD 파이프라인
