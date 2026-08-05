@@ -23,7 +23,7 @@ phases:
       - uv run bandit -c pyproject.toml -q -r app ops scripts labs/dining-web/api
       - uv run pip-audit
       - uv run python scripts/check_secrets.py
-      - uv run pytest tests/test_tools_security.py -q
+      - uv run pytest tests/test_tools_security.py tests/test_thinking_filter.py -q
       # SAM 및 호스팅·파이프라인 CloudFormation 템플릿 검사
       - uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam validate --lint --region "$AWS_REGION" --template-file labs/dining-web/template.yaml
       - uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam validate --lint --region "$AWS_REGION" --template-file infra/dining-web/hosting.yaml

@@ -27,7 +27,25 @@ MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL_ID)
 # 입력 검증 한도 — 과대 페이로드로 인한 비용/지연/남용을 방지합니다.
 MAX_PROMPT_CHARS = 4000
 MIN_PROMPT_CHARS = 1
-THINKING_PATTERN = re.compile(r"<thinking>.*?</thinking>\s*", re.DOTALL)
+THINKING_BLOCK_PATTERN = re.compile(r"<\s*thinking\s*>.*?<\s*/\s*thinking\s*>", re.DOTALL | re.IGNORECASE)
+THINKING_OPEN_PATTERN = re.compile(r"<\s*thinking\s*>", re.IGNORECASE)
+THINKING_CLOSE_PATTERN = re.compile(r"<\s*/\s*thinking\s*>", re.IGNORECASE)
+
+
+def strip_thinking(text: str) -> str:
+    """내부 추론 태그를 fail-closed로 제거합니다.
+
+    완결된 <thinking>...</thinking> 블록을 먼저 제거한 뒤, 스트림이 잘려
+    닫히지 않은 여는 태그가 남으면 그 지점부터 끝까지 버립니다. 응답은 순서대로
+    조립되므로 여는 태그 없이 남은 닫는 태그는 실제 답변 텍스트로 보고 태그
+    문자열만 제거해, 불완전한 추론 유출은 막으면서 정상 답변은 보존합니다.
+    """
+    cleaned = THINKING_BLOCK_PATTERN.sub("", text)
+    open_match = THINKING_OPEN_PATTERN.search(cleaned)
+    if open_match:
+        cleaned = cleaned[: open_match.start()]
+    cleaned = THINKING_CLOSE_PATTERN.sub("", cleaned)
+    return cleaned.strip()
 
 # ---------------------------------------------------------------------------
 # 데이터
@@ -329,7 +347,7 @@ async def invoke(payload):
     async for event in stream:
         if "data" in event and isinstance(event["data"], str):
             chunks.append(event["data"])
-    answer = THINKING_PATTERN.sub("", "".join(chunks)).strip()
+    answer = strip_thinking("".join(chunks))
     if answer:
         yield answer
 
