@@ -453,7 +453,7 @@ sam deploy
 | 우선순위 | 항목 | 개선 방향 |
 | ---: | --- | --- |
 | P1 | CodingService 실패 정책 운영화 | CloudWatch 모델 오류·throttle 지표와 구조화 최종 실패 로그를 집계해 `total_max_attempts`와 alarm 임계값 조정 |
-| P1 | CDK 공급망 | `aws-cdk-lib` 업데이트 후 현재 `brace-expansion` audit 경고 해소 여부 검증 |
+| P1 | CDK 공급망 | `aws-cdk-lib`를 2.263.0으로 올려 audit 경고를 3건→1건으로 축소. 남은 `brace-expansion` high 경고는 `aws-cdk-lib`가 번들하는 `minimatch`의 하위 의존성이라 소비자 override로 교체할 수 없고 상위 릴리스를 기다려야 함 |
 | P1 | 공개 Web 인증 | Cognito/IAM authorizer와 WAF·사용자별 quota 추가 |
 | P2 | 영속 대화 기억 | RestaurantAgent에 AgentCore Memory 또는 명시적 외부 session store 도입 |
 | P2 | 배포 원자성 | Agent 성공 후 API/Web 실패 시 자동 보상 rollback과 검증 runbook 추가 |
