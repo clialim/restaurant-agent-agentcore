@@ -155,6 +155,7 @@ flowchart TB
 - workspace 내부 상대 경로만 허용하고 `..`, 절대 경로, 예약 디렉터리 거부
 - Agent 도구는 `pytest`, `python -m pytest`, `python -m compileall`, `ruff check/format`만 허용
 - child process에서 AWS 자격증명 환경 변수를 제거하고 timeout·출력 길이 제한
+- Bedrock HTTP 호출에 Botocore `standard` retry 적용 — 각 API 호출당 총 3회 상한과 jitter backoff
 - 세션 스토리지로 코드와 Strands 대화 이력 유지
 - S3 Files + 암호화·버전 관리 S3 버킷으로 작업 감사 메타데이터 유지
 - 팀 Streamlit 콘솔, smoke client, issue-to-PR 오케스트레이터 제공
@@ -444,13 +445,13 @@ sam deploy
 - **Git 자격증명 외부화:** Runtime은 patch까지만 만들고 push/PR은 신뢰된 로컬 오케스트레이터가 담당합니다.
 - **감사 데이터 최소화:** 원문 대신 해시·길이·상태를 저장하고 preview를 opt-in으로 둡니다.
 - **평가 후 배포:** 정적·결정적 검사 다음에 LLM 평가를 실행해 비용을 줄이고 실패 시 배포를 차단합니다.
+- **선별적 모델 재시도:** Agent 전체를 다시 실행하지 않고 Botocore `standard` 모드가 각 Bedrock API 호출을 총 3회 이내에서 jitter backoff로 재시도합니다. 권한·검증 오류는 SDK 정책상 재시도하지 않습니다.
 
-## 알려진 제한과 다음 개선
+## 운영 한계와 다음 개선
 
 | 우선순위 | 항목 | 개선 방향 |
 | ---: | --- | --- |
-| P0 | CodingService 내부 오류 진단성 | 사용자에게는 일반 오류를 유지하되 request/session ID 기반 server traceback과 구조화 로그 추가 |
-| P0 | 일시적 Bedrock 오류 | throttling·일시 서비스 오류에 bounded exponential backoff와 retry budget 적용 |
+| P1 | CodingService 실패 정책 운영화 | CloudWatch 모델 오류·throttle 지표와 구조화 최종 실패 로그를 집계해 `total_max_attempts`와 alarm 임계값 조정 |
 | P1 | 내부 추론 필터 | 닫히지 않은 `<thinking>` 스트림도 fail-closed로 제거하는 stateful parser 적용 |
 | P1 | CDK 공급망 | `aws-cdk-lib` 업데이트 후 현재 `brace-expansion` audit 경고 해소 여부 검증 |
 | P1 | 공개 Web 인증 | Cognito/IAM authorizer와 WAF·사용자별 quota 추가 |

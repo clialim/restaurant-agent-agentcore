@@ -5,6 +5,7 @@ description = "AgentCore Runtime에 배포하는 세션 격리형 팀 코딩 서
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "bedrock-agentcore==1.19.0",
+    "botocore==1.43.63",
     "pytest==9.0.3",
     "ruff==0.16.0",
     "strands-agents==1.50.2",
