@@ -20,6 +20,7 @@ from pathlib import Path
 
 from bedrock_agentcore import BedrockAgentCoreApp
 from bedrock_agentcore.runtime import RequestContext
+from botocore.config import Config as BotocoreConfig
 from strands import Agent, tool
 from strands.models import BedrockModel
 from strands.session import FileSessionManager
@@ -32,6 +33,8 @@ PERSISTENT_ROOT = os.environ.get("PERSISTENT_ROOT")
 
 WORK_LOG_INCLUDE_PREVIEWS = os.environ.get("WORK_LOG_INCLUDE_PREVIEWS", "false").lower() == "true"
 WORK_LOG_REQUIRED = os.environ.get("WORK_LOG_REQUIRED", "false").lower() == "true"
+BEDROCK_TOTAL_MAX_ATTEMPTS = 3
+BEDROCK_READ_TIMEOUT_SECONDS = 120
 
 MAX_PROMPT_CHARS = 4000
 MAX_FILE_BYTES = 256 * 1024
@@ -303,7 +306,7 @@ def _append_work_log(
 
 
 def _build_agent(session_id: str) -> Agent:
-    """세션 스토리지에 대화 이력을 보존하는 코딩 Agent를 생성합니다."""
+    """세션 상태를 유지하며 SDK 경계에서 제한된 재시도를 적용한 Agent를 생성합니다."""
     session_manager = FileSessionManager(
         session_id=session_id,
         storage_dir=str(_workspace() / ".sessions"),
@@ -313,6 +316,13 @@ def _build_agent(session_id: str) -> Agent:
             model_id=MODEL_ID,
             region_name=REGION,
             temperature=0.0,
+            boto_client_config=BotocoreConfig(
+                read_timeout=BEDROCK_READ_TIMEOUT_SECONDS,
+                retries={
+                    "mode": "standard",
+                    "total_max_attempts": BEDROCK_TOTAL_MAX_ATTEMPTS,
+                },
+            ),
         ),
         system_prompt=SYSTEM_PROMPT,
         tools=[list_files, read_file, write_file, run_checks],
