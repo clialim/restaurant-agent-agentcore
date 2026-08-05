@@ -446,13 +446,13 @@ sam deploy
 - **감사 데이터 최소화:** 원문 대신 해시·길이·상태를 저장하고 preview를 opt-in으로 둡니다.
 - **평가 후 배포:** 정적·결정적 검사 다음에 LLM 평가를 실행해 비용을 줄이고 실패 시 배포를 차단합니다.
 - **선별적 모델 재시도:** Agent 전체를 다시 실행하지 않고 Botocore `standard` 모드가 각 Bedrock API 호출을 총 3회 이내에서 jitter backoff로 재시도합니다. 권한·검증 오류는 SDK 정책상 재시도하지 않습니다.
+- **fail-closed 추론 필터:** 완결된 `<thinking>` 블록을 제거한 뒤 스트림이 잘려 닫히지 않은 여는 태그가 남으면 그 지점부터 끝까지 버려 불완전한 내부 추론이 응답으로 새지 않게 합니다. 순서대로 조립된 응답에서 여는 태그 없이 남은 닫는 태그는 정상 텍스트로 보고 태그 문자열만 제거해 답변 손상을 피합니다.
 
 ## 운영 한계와 다음 개선
 
 | 우선순위 | 항목 | 개선 방향 |
 | ---: | --- | --- |
 | P1 | CodingService 실패 정책 운영화 | CloudWatch 모델 오류·throttle 지표와 구조화 최종 실패 로그를 집계해 `total_max_attempts`와 alarm 임계값 조정 |
-| P1 | 내부 추론 필터 | 닫히지 않은 `<thinking>` 스트림도 fail-closed로 제거하는 stateful parser 적용 |
 | P1 | CDK 공급망 | `aws-cdk-lib` 업데이트 후 현재 `brace-expansion` audit 경고 해소 여부 검증 |
 | P1 | 공개 Web 인증 | Cognito/IAM authorizer와 WAF·사용자별 quota 추가 |
 | P2 | 영속 대화 기억 | RestaurantAgent에 AgentCore Memory 또는 명시적 외부 session store 도입 |

@@ -27,7 +27,9 @@ from tools import write_file
 logger = logging.getLogger(__name__)
 
 MAX_ROUNDS = 3
-THINKING_PATTERN = re.compile(r"<thinking>.*?</thinking>\s*", re.DOTALL)
+THINKING_BLOCK_PATTERN = re.compile(r"<\s*thinking\s*>.*?<\s*/\s*thinking\s*>", re.DOTALL | re.IGNORECASE)
+THINKING_OPEN_PATTERN = re.compile(r"<\s*thinking\s*>", re.IGNORECASE)
+THINKING_CLOSE_PATTERN = re.compile(r"<\s*/\s*thinking\s*>", re.IGNORECASE)
 TEST_SUMMARY_PATTERN = re.compile(r"^passed=(\d+)\s+failed=(\d+)$", re.MULTILINE)
 DEMO_DRAFT = '''def is_over_capacity(reservation_count, restaurant_capacity):
     """예약 인원이 수용 인원을 넘는지 확인합니다."""
@@ -44,8 +46,19 @@ def write_code(prompt: str) -> str:
 
 
 def _final_answer(output: str) -> str:
-    """모델 내부 추론 태그를 제거하고 판정에 사용할 최종 답변만 반환합니다."""
-    return THINKING_PATTERN.sub("", output).strip()
+    """내부 추론 태그를 fail-closed로 제거하고 판정에 사용할 최종 답변만 반환합니다.
+
+    완결된 <thinking>...</thinking> 블록을 먼저 제거한 뒤, 닫히지 않은 여는
+    태그가 남으면 그 지점부터 끝까지 버립니다. 출력은 순서대로 조립되므로 여는
+    태그 없이 남은 닫는 태그는 실제 답변으로 보고 태그 문자열만 제거해, 불완전한
+    추론이 판정 파싱에 섞이지 않게 하면서 정상 판정 텍스트는 보존합니다.
+    """
+    cleaned = THINKING_BLOCK_PATTERN.sub("", output)
+    open_match = THINKING_OPEN_PATTERN.search(cleaned)
+    if open_match:
+        cleaned = cleaned[: open_match.start()]
+    cleaned = THINKING_CLOSE_PATTERN.sub("", cleaned)
+    return cleaned.strip()
 
 
 def _approved(review: str) -> bool:
