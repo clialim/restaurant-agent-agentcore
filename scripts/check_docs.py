@@ -23,7 +23,14 @@ from __future__ import annotations
 import re
 import sys
 import xml.etree.ElementTree as ET  # nosec B405 - 저장소 내부 신뢰 SVG만 파싱합니다.
+from dataclasses import dataclass
 from pathlib import Path
+
+# Windows 콘솔의 기본 레거시 코드페이지(cp949 등)는 em dash 같은 문자를
+# 인코딩하지 못해 UnicodeEncodeError로 게이트가 죽습니다. UTF-8로 강제해
+# 플랫폼과 무관하게 출력이 성공하도록 합니다.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -87,6 +94,43 @@ def _find_files(suffix: str) -> list[Path]:
     )
 
 
+@dataclass(frozen=True)
+class MermaidBlock:
+    """Markdown 파일에서 추출한 단일 ```mermaid 블록."""
+
+    path: Path
+    lineno: int  # ```mermaid 줄의 1-based 줄 번호
+    body: str
+
+
+def extract_mermaid_blocks(path: Path, lines: list[str]) -> list[MermaidBlock]:
+    """Markdown 줄 목록에서 닫힌 ```mermaid 블록만 추출합니다.
+
+    닫히지 않은 블록은 check_markdown_file의 구조 검사가 별도로 보고하므로
+    여기서는 건너뜁니다.
+    """
+    blocks: list[MermaidBlock] = []
+    index = 0
+    while index < len(lines):
+        if MERMAID_FENCE_PATTERN.match(lines[index]):
+            start = index
+            body_lines: list[str] = []
+            index += 1
+            closed = False
+            while index < len(lines):
+                if FENCE_END_PATTERN.match(lines[index]):
+                    closed = True
+                    break
+                body_lines.append(lines[index])
+                index += 1
+            if closed:
+                blocks.append(MermaidBlock(path=path, lineno=start + 1, body="\n".join(body_lines)))
+            else:
+                break
+        index += 1
+    return blocks
+
+
 def _bracket_balance(text: str) -> bool:
     """소괄호·중괄호·대괄호가 서로 교차하지 않고 균형을 이루는지 확인합니다."""
     pairs = {")": "(", "]": "[", "}": "{"}
@@ -132,24 +176,22 @@ def check_markdown_file(path: Path) -> list[str]:
     if fence_count % 2 != 0:
         errors.append(f"{path}: 코드 fence(```) 개수가 홀수입니다 ({fence_count}개).")
 
-    index = 0
-    while index < len(lines):
-        if MERMAID_FENCE_PATTERN.match(lines[index]):
-            start = index
-            body_lines: list[str] = []
-            index += 1
-            closed = False
-            while index < len(lines):
-                if FENCE_END_PATTERN.match(lines[index]):
-                    closed = True
-                    break
-                body_lines.append(lines[index])
-                index += 1
-            if not closed:
-                errors.append(f"{path}:{start + 1}: mermaid 블록이 닫히지 않았습니다.")
-                break
-            errors.extend(_check_mermaid_block(path, start + 1, body_lines))
-        index += 1
+    open_count = sum(1 for line in lines if MERMAID_FENCE_PATTERN.match(line))
+    closed_blocks = extract_mermaid_blocks(path, lines)
+    if open_count > len(closed_blocks):
+        first_unclosed = next(
+            (
+                index + 1
+                for index, line in enumerate(lines)
+                if MERMAID_FENCE_PATTERN.match(line)
+                and not any(block.lineno == index + 1 for block in closed_blocks)
+            ),
+            None,
+        )
+        errors.append(f"{path}:{first_unclosed}: mermaid 블록이 닫히지 않았습니다.")
+
+    for block in closed_blocks:
+        errors.extend(_check_mermaid_block(path, block.lineno, block.body.splitlines()))
 
     for match in LINK_PATTERN.finditer(text):
         target = match.group(1)
