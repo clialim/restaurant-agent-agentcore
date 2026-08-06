@@ -25,6 +25,7 @@ phases:
       - uv run python scripts/check_secrets.py
       - uv run pytest tests/test_tools_security.py tests/test_thinking_filter.py -q
       - uv run python scripts/check_docs.py
+      - uv run python scripts/check_mermaid_render.py
       # SAM 및 호스팅·파이프라인 CloudFormation 템플릿 검사
       - uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam validate --lint --region "$AWS_REGION" --template-file labs/dining-web/template.yaml
       - uvx --from "aws-sam-cli==$SAM_CLI_VERSION" sam validate --lint --region "$AWS_REGION" --template-file infra/dining-web/hosting.yaml

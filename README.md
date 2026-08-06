@@ -333,9 +333,12 @@ uv run pip-audit
 uv run python scripts/check_secrets.py
 uv run pytest tests/test_tools_security.py tests/test_thinking_filter.py -q
 uv run python scripts/check_docs.py
+uv run python scripts/check_mermaid_render.py
 ```
 
-`scripts/check_docs.py`는 생성물 디렉터리를 제외한 저장소의 Markdown·SVG 파일을 검사합니다. 로컬 링크가 실제로 존재하는지, 코드 fence 개수가 짝수인지, `mermaid` 블록이 알려진 다이어그램 종류로 시작하고 괄호가 균형을 이루는지, SVG가 유효한 XML로 파싱되는지 확인합니다. git 메타데이터 없이도 동작해 CodeBuild ZIP 소스에서도 실행됩니다. 전체 Mermaid 문법이나 SVG 렌더링을 보장하지는 않습니다.
+`scripts/check_docs.py`는 생성물 디렉터리를 제외한 저장소의 Markdown·SVG 파일을 검사합니다. 로컬 링크가 실제로 존재하는지, 코드 fence 개수가 짝수인지, `mermaid` 블록이 알려진 다이어그램 종류로 시작하고 괄호가 균형을 이루는지, SVG가 유효한 XML로 파싱되는지 확인합니다. git 메타데이터 없이도 동작해 CodeBuild ZIP 소스에서도 실행됩니다.
+
+`scripts/check_mermaid_render.py`는 `check_docs.py`의 구조 검사를 보강해, 각 `mermaid` 블록을 `@mermaid-js/mermaid-cli`(mmdc)로 실제 SVG로 렌더링해 GitHub에서 다이어그램이 깨지는 문법 오류를 배포 전에 잡습니다. Node.js/npx가 없는 환경에서는 건너뛰고 exit 0을 반환합니다.
 
 ### LLM 평가 게이트
 
@@ -450,7 +453,7 @@ sam deploy
 - **평가 후 배포:** 정적·결정적 검사 다음에 LLM 평가를 실행해 비용을 줄이고 실패 시 배포를 차단합니다.
 - **선별적 모델 재시도:** Agent 전체를 다시 실행하지 않고 Botocore `standard` 모드가 각 Bedrock API 호출을 총 3회 이내에서 jitter backoff로 재시도합니다. 권한·검증 오류는 SDK 정책상 재시도하지 않습니다.
 - **fail-closed 추론 필터:** 완결된 `<thinking>` 블록을 제거한 뒤 스트림이 잘려 닫히지 않은 여는 태그가 남으면 그 지점부터 끝까지 버려 불완전한 내부 추론이 응답으로 새지 않게 합니다. 순서대로 조립된 응답에서 여는 태그 없이 남은 닫는 태그는 정상 텍스트로 보고 태그 문자열만 제거해 답변 손상을 피합니다.
-- **문서도 CI 게이트 대상:** README·위협 모델의 로컬 링크, Mermaid 블록 구조, SVG XML 유효성을 `scripts/check_docs.py`로 배포 전에 결정적으로 검증합니다.
+- **문서도 CI 게이트 대상:** README·위협 모델의 로컬 링크, Mermaid 블록 구조, SVG XML 유효성을 `scripts/check_docs.py`로 배포 전에 결정적으로 검증하고, `scripts/check_mermaid_render.py`가 mermaid-cli로 실제 렌더링까지 확인합니다.
 
 ## 운영 한계와 다음 개선
 
@@ -461,7 +464,6 @@ sam deploy
 | P1 | 공개 Web 인증 | Cognito/IAM authorizer와 WAF·사용자별 quota 추가 |
 | P2 | 영속 대화 기억 | RestaurantAgent에 AgentCore Memory 또는 명시적 외부 session store 도입 |
 | P2 | 배포 원자성 | Agent 성공 후 API/Web 실패 시 자동 보상 rollback과 검증 runbook 추가 |
-| P3 | Mermaid 렌더링 검증 | `check_docs.py`는 구조적 검사만 하므로, 실제 Mermaid CLI/브라우저 렌더링까지 CI에서 확인하는 단계 추가 |
 
 ## 참고
 
