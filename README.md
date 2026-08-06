@@ -463,12 +463,13 @@ sam deploy
 | P1 | CDK 공급망 | `aws-cdk-lib`를 2.263.0으로 올려 audit 경고를 3건→1건으로 축소. 남은 `brace-expansion` high 경고는 `aws-cdk-lib`가 번들하는 `minimatch`의 하위 의존성이라 소비자 override로 교체할 수 없고 상위 릴리스를 기다려야 함 |
 | P1 | 공개 Web 인증 | Cognito/IAM authorizer와 WAF·사용자별 quota 추가 |
 | P2 | 영속 대화 기억 | RestaurantAgent에 AgentCore Memory 또는 명시적 외부 session store 도입 |
-| P2 | 배포 원자성 | Agent 성공 후 API/Web 실패 시 자동 보상 rollback과 검증 runbook 추가 |
+| P2 | 배포 원자성 | 단계 간 자동 보상 rollback, 배포 전 식별자 스냅샷, smoke test 자동화 — [`docs/runbook-rollback.md`](docs/runbook-rollback.md)에 수동 절차 문서화 완료 |
 
 ## 참고
 
 - [아키텍처 SVG](docs/architecture.svg)
 - [위협 모델](docs/threat-model.md)
+- [롤백 Runbook](docs/runbook-rollback.md)
 - [AWS AgentCore Runtime Python 배포 가이드](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-get-started-code-deploy-python.html)
 - [AgentCore Runtime 관찰성 메트릭](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-runtime-metrics.html)
 - [Strands Agents 문서](https://strandsagents.com/latest/)
